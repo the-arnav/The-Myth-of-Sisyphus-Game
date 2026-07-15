@@ -257,10 +257,22 @@
     "PUSH AS IF IT MATTERS - IT DOES"
   ];
 
+  // window.storage only exists inside Claude's own artifact runtime - a plain deployed
+  // site (Netlify, etc.) doesn't have it, so it silently no-ops there and "best distance"
+  // never saves. localStorage is the real, universally-supported browser API for this,
+  // so it's used as the actual persistence layer, with window.storage kept as an optional
+  // extra save target when this happens to still be running inside that runtime.
+  try {
+    const saved = localStorage.getItem('sisyphus-best-m');
+    if (saved){ bestM = parseInt(saved,10)||0; updateHud(); }
+  } catch(e){}
   if (window.storage && window.storage.get){
-    window.storage.get('sisyphus-best-m').then(r=>{ if(r&&r.value){ bestM=parseInt(r.value,10)||0; updateHud(); } }).catch(()=>{});
+    window.storage.get('sisyphus-best-m').then(r=>{ if(r&&r.value){ const v=parseInt(r.value,10)||0; if (v>bestM){ bestM=v; updateHud(); } } }).catch(()=>{});
   }
-  function saveBest(){ if(window.storage && window.storage.set){ window.storage.set('sisyphus-best-m', String(bestM)).catch(()=>{}); } }
+  function saveBest(){
+    try { localStorage.setItem('sisyphus-best-m', String(bestM)); } catch(e){}
+    if (window.storage && window.storage.set){ window.storage.set('sisyphus-best-m', String(bestM)).catch(()=>{}); }
+  }
 
   const distEl=document.getElementById('distVal'), bestEl=document.getElementById('bestVal');
   function updateHud(){ distEl.textContent=String(distM).padStart(4,'0'); bestEl.textContent=String(bestM).padStart(4,'0'); }
@@ -425,4 +437,627 @@
   const BIOMES = [
     { name:'alpine-sunset', sky:['#4a86bb','#bfe6ef'], sun:'#fff3c4', mtnFar:'#8497b2', mtnNear:'#59728c', fall:'#f5fbff', grass:['#4b8a34','#2f5c26'], tree:['#1e3d22','#2f5c34'], night:0,
       photo:'https://images.unsplash.com/photo-1612441804231-77a36b284856?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
-    { name:'italian-alps', sky:['#4a7fae','#cfe8f0'], sun:'#fff6d8', mtnFar:'#7e93ac', mtnNear:'#4f6884', fall:'#eef7fb', grass:['#4d8a3a','#2e5a2
+    { name:'italian-alps', sky:['#4a7fae','#cfe8f0'], sun:'#fff6d8', mtnFar:'#7e93ac', mtnNear:'#4f6884', fall:'#eef7fb', grass:['#4d8a3a','#2e5a28'], tree:['#1c3a20','#2c5230'], night:0,
+      photo:'https://images.unsplash.com/photo-1602941149908-aed8997fc223?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
+    { name:'ember-summit', sky:['#3a1f2e','#c96a4a'], sun:'#ff9a52', mtnFar:'#5c3a3a', mtnNear:'#2e1c22', fall:'#ffd9a8', grass:['#4a3a24','#2c2216'], tree:['#231810','#341f18'], night:0.15,
+      photo:'https://images.unsplash.com/photo-1778017825902-5d212f5ce532?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
+    { name:'violet-horizon', sky:['#2c2a52','#8b6fa0'], sun:'#f0a0c0', mtnFar:'#4a3f66', mtnNear:'#241f3a', fall:'#e8d6f0', grass:['#39304a','#221c30'], tree:['#181428','#251f38'], night:0.3,
+      photo:'https://images.unsplash.com/photo-1755845711249-32cfcdcabfeb?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
+    { name:'frostpine-dawn', sky:['#2e3a52','#e8a878'], sun:'#ffcf9c', mtnFar:'#5a6478', mtnNear:'#2c3648', fall:'#fbe8d4', grass:['#2c4a34','#1a301f'], tree:['#132018','#1e2f22'], night:0.1,
+      photo:'https://images.unsplash.com/photo-1761585580432-77b4d4f5b299?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
+    { name:'pastel-mist', sky:['#3a3358','#e0a4a0'], sun:'#ffc9b0', mtnFar:'#5c5470', mtnNear:'#332c48', fall:'#f6dde0', grass:['#3e4a3a','#242e22'], tree:['#1a221c','#28322a'], night:0.2,
+      photo:'https://images.unsplash.com/photo-1772733694354-3b4a33568ef4?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
+    { name:'amber-fog', sky:['#3a2418','#d88a4a'], sun:'#ffb066', mtnFar:'#5c4030', mtnNear:'#2e2018', fall:'#ffdcae', grass:['#4a3a1e','#2c2412'], tree:['#221810','#332418'], night:0.18,
+      photo:'https://images.unsplash.com/photo-1761995912979-c3646524391b?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
+    { name:'alpstein-glow', sky:['#241c3a','#e08a3c'], sun:'#ffb35c', mtnFar:'#40304a', mtnNear:'#1e1826', fall:'#ffdca8', grass:['#403420','#241a10'], tree:['#1c140c','#2a2016'], night:0.35,
+      photo:'https://images.unsplash.com/photo-1780042426982-cb794203ea1d?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
+    { name:'matterhorn-night', sky:['#0a0e24','#242c50'], sun:'#e4e8ff', mtnFar:'#242238', mtnNear:'#12111e', fall:'#c8d4ee', grass:['#1a2620','#101a14'], tree:['#0c1610','#141f18'], night:1,
+      photo:'https://images.unsplash.com/photo-1760985813018-b6b951c57fe8?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
+    { name:'turquoise-braies', sky:['#2a3a56','#7ab0c4'], sun:'#e8f4ee', mtnFar:'#3e5468', mtnNear:'#1e2c3a', fall:'#d6f0ea', grass:['#2e5638','#1a3420'], tree:['#122018','#1c2f22'], night:0.12,
+      photo:'https://images.unsplash.com/photo-1741866987680-5e3d7f052b87?fm=jpg&q=80&w=1600&auto=format&fit=crop' }
+  ];
+  // Preload each biome's photo once. No crossOrigin attribute is set here - the game
+  // never reads pixel data back off the canvas (no getImageData/toDataURL calls), so
+  // there's no need to request CORS-tainted access, and requesting it anyway is exactly
+  // what silently breaks image loading in real-world deployments: if the CDN edge node
+  // that answers a given request doesn't echo back an Access-Control-Allow-Origin header
+  // for that exact request, the browser aborts the whole load instead of just falling
+  // back to a "tainted" canvas. Dropping crossOrigin removes that entire failure mode.
+  // A single cache-busted retry covers ordinary transient network hiccups on first load.
+  BIOMES.forEach(b=>{
+    b.img = new Image();
+    b.loaded = false;
+    b._retried = false;
+    function attach(src){
+      b.img.onload = ()=>{ b.loaded = true; };
+      b.img.onerror = ()=>{
+        if (!b._retried){
+          b._retried = true;
+          setTimeout(()=>{
+            const sep = b.photo.indexOf('?')>=0 ? '&' : '?';
+            attach(b.photo + sep + '_r=' + Date.now());
+          }, 900);
+        }
+      };
+      b.img.src = src;
+    }
+    attach(b.photo);
+  });
+  const BIOME_SPAN = 320; // meters of progress per biome before crossfading to the next
+  function lerp(a,b,t){return a+(b-a)*t;}
+  function hexToRgb(h){h=h.replace('#','');return [parseInt(h.substr(0,2),16),parseInt(h.substr(2,2),16),parseInt(h.substr(4,2),16)];}
+  function mixHex(h1,h2,t){const a=hexToRgb(h1),b=hexToRgb(h2);return `rgb(${lerp(a[0],b[0],t)|0},${lerp(a[1],b[1],t)|0},${lerp(a[2],b[2],t)|0})`;}
+  function mixBiome(A,B,t){
+    return {
+      skyTop:mixHex(A.sky[0],B.sky[0],t), skyBot:mixHex(A.sky[1],B.sky[1],t),
+      sun:mixHex(A.sun,B.sun,t),
+      mtnFar:mixHex(A.mtnFar,B.mtnFar,t), mtnNear:mixHex(A.mtnNear,B.mtnNear,t),
+      fall:mixHex(A.fall,B.fall,t),
+      grassTop:mixHex(A.grass[0],B.grass[0],t), grassLow:mixHex(A.grass[1],B.grass[1],t),
+      treeNear:mixHex(A.tree[1],B.tree[1],t), treeFar:mixHex(A.tree[0],B.tree[0],t),
+      nightAmt: lerp(A.night,B.night,t)
+    };
+  }
+  function getPalette(){
+    const progressM = Math.max(0, maxX)*M_PER_PX;
+    const cycleLen = BIOME_SPAN*BIOMES.length;
+    const loop = Math.floor(progressM/cycleLen);
+    const posInCycle = progressM - loop*cycleLen;
+    const pos = posInCycle/BIOME_SPAN;
+    const i0 = Math.floor(pos)%BIOMES.length, i1=(i0+1)%BIOMES.length;
+    const rawT = pos-Math.floor(pos);
+    // crossfade only happens in the last slice of each biome's span - fast and
+    // eased, so scenery mostly holds one crisp photo instead of constantly
+    // double-exposing two images across the whole climb
+    const TRANS = 0.16;
+    let t = rawT < (1-TRANS) ? 0 : (rawT-(1-TRANS))/TRANS;
+    t = t*t*(3-2*t); // smoothstep ease
+    const pal = mixBiome(BIOMES[i0], BIOMES[i1], t);
+    // each full lap gets a subtle extra chill/darkening so the climb still feels like it's
+    // going somewhere higher and harsher, without needing brand-new art per lap
+    const chill = Math.min(loop*0.08, 0.4);
+    pal.mtnFar = mixHex(pal.mtnFar, '#1a2030', chill);
+    pal.mtnNear = mixHex(pal.mtnNear, '#0e1220', chill);
+    pal.nightAmt = Math.min(1, pal.nightAmt + chill*0.3);
+    pal.isNight = pal.nightAmt > 0.5;
+    pal.loop = loop;
+    pal.i0 = i0; pal.i1 = i1; pal.t = t;
+    return pal;
+  }
+
+  // ---------- rendering ----------
+  function drawTree(sx, gy, scale, tint, alpha, broad, seed){
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(sx, gy);
+    ctx.scale(scale, scale);
+    const sh = mixHex(tint,'#000000',0.42); // shadow side
+    const hi = mixHex(tint,'#ffffff',0.16); // sunlit edge
+
+    // trunk: tapered, two-tone bark with a few knot/grain marks
+    ctx.fillStyle = '#3a2418';
+    ctx.beginPath();
+    ctx.moveTo(-3.4,4); ctx.lineTo(-2.4,-8); ctx.lineTo(2.4,-8); ctx.lineTo(3.4,4);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    ctx.fillRect(0.4,-7,1.4,10);
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    ctx.fillRect(-2.6,-7,1,10);
+
+    if (broad){
+      // rounded broadleaf canopy - a few overlapping lobes instead of a pine cone,
+      // so the forest isn't 100% conifer silhouettes
+      const lobes = [[-6,-16,10],[5,-15,9],[0,-24,12],[-3,-9,8]];
+      lobes.forEach(([lx,ly,r],i)=>{
+        ctx.fillStyle = i%2? sh : tint;
+        ctx.beginPath(); ctx.arc(lx,ly,r,0,Math.PI*2); ctx.fill();
+      });
+      ctx.fillStyle = hi;
+      ctx.beginPath(); ctx.arc(-4,-22,5,0,Math.PI*2); ctx.fill();
+      ctx.restore();
+      return;
+    }
+
+    // pine layers, jagged (not smooth triangles) so the canopy reads as needles,
+    // each layer shaded darker on the left / lighter on the right for volume,
+    // plus a thin snow cap on the topmost layer in colder biomes.
+    const layers = [ [0,-13,27,26], [0,-29,22,25], [0,-43,17,21] ];
+    layers.forEach(([lx,ly,lw,lh],li)=>{
+      const teeth = 5;
+      ctx.fillStyle = sh;
+      ctx.beginPath();
+      ctx.moveTo(lx, ly-lh);
+      for (let t=0; t<=teeth; t++){
+        const tt = t/teeth;
+        const jag = (t%2===0) ? 1 : 0.72;
+        ctx.lineTo(lx - (lw/2)*tt*jag, ly - lh*(1-tt));
+      }
+      ctx.lineTo(lx-lw/2, ly);
+      ctx.lineTo(lx+lw/2, ly);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = tint;
+      ctx.beginPath();
+      ctx.moveTo(lx, ly-lh);
+      for (let t=0; t<=teeth; t++){
+        const tt = t/teeth;
+        const jag = (t%2===0) ? 1 : 0.72;
+        ctx.lineTo(lx + (lw/2)*tt*jag, ly - lh*(1-tt));
+      }
+      ctx.lineTo(lx+lw/2, ly);
+      ctx.closePath(); ctx.fill();
+      if (li===0){
+        ctx.fillStyle = hi; ctx.globalAlpha = alpha*0.5;
+        ctx.beginPath(); ctx.moveTo(lx,ly-lh); ctx.lineTo(lx+4,ly-lh*0.55); ctx.lineTo(lx,ly-lh*0.5); ctx.closePath(); ctx.fill();
+        ctx.globalAlpha = alpha;
+      }
+    });
+    ctx.restore();
+  }
+
+  // cover-fit a real photo with a gentle parallax drift, then wash it toward the biome's mood color
+  function drawPhoto(img, camX, washColor, washAmt){
+    const ir = img.width / img.height, cr = W / H;
+    let dw, dh;
+    if (cr > ir){ dw = W*1.08; dh = dw/ir; } else { dh = H*1.08; dw = dh*ir; }
+    const drift = Math.max(-50, Math.min(50, -camX*0.02));
+    ctx.drawImage(img, (W-dw)/2+drift, (H-dh)/2, dw, dh);
+    if (washAmt>0.02){
+      ctx.fillStyle = washColor; ctx.globalAlpha = washAmt;
+      ctx.fillRect(0,0,W,H); ctx.globalAlpha = 1;
+    }
+  }
+
+  // Layered, textured mountain silhouettes: smooth-noise ridgelines, a soft top-lit
+  // gradient, snow caps above a height threshold, and faint horizontal rock-strata
+  // lines. Drawn semi-transparent over the photo backdrop so the two combine into
+  // one painterly range instead of the photo standing totally alone with no
+  // foreground mountain shape to anchor the parallax.
+  function ridgeHeight(seedBase, wx, freq, amp){
+    const n = wx*freq, i = Math.floor(n), f = n-i;
+    const h0 = hash(seedBase+i), h1 = hash(seedBase+i+1);
+    const s = f*f*(3-2*f);
+    return (h0*(1-s)+h1*s)*amp;
+  }
+  function drawMountainLayer(camX, parallax, seedBase, freq, amp, baseY, color, alpha, snowAmt){
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    const step = 10, px = camX*parallax;
+    ctx.beginPath(); ctx.moveTo(-10,H+10);
+    for (let sx=-10; sx<=W+10; sx+=step){
+      const y = baseY - ridgeHeight(seedBase, px+sx, freq, amp);
+      ctx.lineTo(sx,y);
+    }
+    ctx.lineTo(W+10,H+10); ctx.closePath();
+    const grad = ctx.createLinearGradient(0, baseY-amp, 0, baseY);
+    grad.addColorStop(0, mixHex(color,'#ffffff',0.14));
+    grad.addColorStop(1, color);
+    ctx.fillStyle = grad; ctx.fill();
+
+    if (snowAmt>0.04){
+      ctx.fillStyle = `rgba(255,255,255,${0.8*snowAmt})`;
+      for (let sx=-10; sx<=W+10; sx+=step){
+        const y = baseY - ridgeHeight(seedBase, px+sx, freq, amp);
+        if (baseY-y > amp*0.7){
+          ctx.beginPath(); ctx.moveTo(sx-7,y+11); ctx.lineTo(sx,y); ctx.lineTo(sx+7,y+11); ctx.closePath(); ctx.fill();
+        }
+      }
+    }
+
+    ctx.strokeStyle='rgba(0,0,0,0.13)'; ctx.lineWidth=1.2;
+    for (let li=0; li<4; li++){
+      const ly = baseY - amp*0.16*(li+1);
+      ctx.beginPath();
+      for (let sx=-10; sx<=W+10; sx+=step*2){
+        const ridgeY = baseY - ridgeHeight(seedBase, px+sx, freq, amp);
+        const y = Math.max(ridgeY+6, ly + Math.sin((px+sx)*0.01+li)*6);
+        if (sx===-10) ctx.moveTo(sx,y); else ctx.lineTo(sx,y);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function drawMountains(camX, pal){
+    const baseY = groundY() - AMP()*0.30;
+    const cold = Math.min(1, pal.nightAmt*0.5 + (pal.loop? Math.min(pal.loop*0.18,0.55):0));
+    drawMountainLayer(camX, 0.16, 47.3, 0.0075, AMP()*1.05, baseY-AMP()*0.25, pal.mtnNear, 0.58, cold);
+  }
+
+  function drawBackground(camX, pal){
+    const A = BIOMES[pal.i0], B = BIOMES[pal.i1];
+    if (A.loaded){
+      drawPhoto(A.img, camX, pal.skyBot, 0.24 + pal.nightAmt*0.4);
+      if (B.loaded && pal.t>0.02){
+        ctx.save(); ctx.globalAlpha = pal.t;
+        drawPhoto(B.img, camX, pal.skyBot, 0.24 + pal.nightAmt*0.4);
+        ctx.restore();
+      }
+    } else {
+      const g=ctx.createLinearGradient(0,0,0,H);
+      g.addColorStop(0,pal.skyTop); g.addColorStop(1,pal.skyBot);
+      ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    }
+
+    // stars
+    if (pal.nightAmt>0.05){
+      ctx.save(); ctx.globalAlpha=pal.nightAmt;
+      for(let i=0;i<50;i++){
+        const sx=(i*137.5-camX*0.04)%W; const sxw=((sx%W)+W)%W;
+        const sy=(i*57.3)%(H*0.5);
+        const tw=0.5+0.5*Math.sin(elapsed*2+i);
+        ctx.fillStyle='#f2ede0'; ctx.globalAlpha=pal.nightAmt*(0.35+0.65*tw);
+        ctx.fillRect(sxw,sy,2,2);
+      }
+      ctx.restore();
+    }
+
+    // sun / moon - phase is driven by progress (maxX), so it only ever advances forward
+    const cyclePx = maxX;
+    const sunPhase=((cyclePx%5600)+5600)%5600/5600*Math.PI*2;
+    const sunX=W*0.5+Math.cos(sunPhase)*W*0.6-camX*0.015;
+    const sunY=H*0.2-Math.sin(sunPhase)*H*0.15;
+    const ssx=((sunX%W)+W)%W, ssy=Math.max(26,sunY);
+    if (pal.isNight){
+      ctx.save();
+      ctx.fillStyle=pal.sun;
+      ctx.beginPath(); ctx.arc(ssx,ssy,20,0,Math.PI*2); ctx.fill();
+      ctx.globalCompositeOperation='destination-out';
+      ctx.beginPath(); ctx.arc(ssx+9,ssy-4,17,0,Math.PI*2); ctx.fill();
+      ctx.restore();
+    } else {
+      ctx.save();
+      ctx.shadowColor=pal.sun; ctx.shadowBlur=18;
+      ctx.fillStyle=pal.sun;
+      ctx.beginPath(); ctx.arc(ssx,ssy,22,0,Math.PI*2); ctx.fill();
+      ctx.restore();
+    }
+
+    drawMountains(camX, pal);
+
+    // birds
+    ctx.strokeStyle='rgba(30,25,35,0.5)'; ctx.lineWidth=2;
+    for(let i=0;i<3;i++){
+      const bx=((elapsed*40 + i*180 - camX*0.1)%(W+200))-100;
+      const by=H*0.18+i*22+Math.sin(elapsed*1.5+i)*6;
+      ctx.beginPath();
+      ctx.moveTo(bx-8,by); ctx.quadraticCurveTo(bx-4,by-6,bx,by);
+      ctx.quadraticCurveTo(bx+4,by-6,bx+8,by);
+      ctx.stroke();
+    }
+
+    // fireflies
+    if (pal.nightAmt>0.15){
+      ctx.save();
+      for(let i=0;i<14;i++){
+        const fx=((i*93.7-camX*0.3)%W+W)%W;
+        const fy=H*0.45+((i*61.3)%(H*0.2))+Math.sin(elapsed*2+i)*8;
+        const tw=0.4+0.6*Math.sin(elapsed*3+i*2);
+        ctx.fillStyle='#ffe08a';
+        ctx.globalAlpha=pal.nightAmt*tw*0.8;
+        ctx.beginPath(); ctx.arc(fx,fy,2,0,Math.PI*2); ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // forest layer (parallax, behind terrain crest) - anchored to the real
+    // hill contour (damped by depth) so trees ride the slope instead of
+    // hovering at one flat height, and sized across a much wider range so
+    // the treeline reads as a mixed forest, not a row of identical cutouts.
+    const treeCamX = camX*0.55;
+    for (let i=Math.floor(treeCamX/58)-2; i<Math.floor((treeCamX+W)/58)+2; i++){
+      const jitter = hash(i)*32-16;
+      const sx = i*58 - treeCamX + jitter;
+      if (sx<-70||sx>W+70) continue;
+      const sizeRoll = hash(i*3.1);
+      const scale = 0.55 + sizeRoll*sizeRoll*1.7; // bigger overall, occasional giants
+      const depth = hash(i*7.7);
+      const tint = depth>0.5? pal.treeNear: pal.treeFar;
+      const wx = camX + sx; // approximate world position, used only to match slope contour
+      const contourPull = 0.55 + depth*0.45; // tracks the hill closely so trunks plant into it
+      const ridgeY = groundY() - heightAt(wx)*contourPull - (1-depth)*10;
+      const broad = hash(i*11.3) > 0.82; // occasional rounded broadleaf for variety among the pines
+      drawTree(sx, ridgeY, scale, tint, 0.5+depth*0.4, broad, i);
+    }
+
+    // a handful of large foreground trees locked exactly to the true terrain
+    // contour (no parallax offset at all), so their trunk base is guaranteed
+    // to sit right on the ground line rather than merely tracking it loosely
+    for (let i=Math.floor(camX/240)-1; i<Math.floor((camX+W)/240)+1; i++){
+      if (hash(i*2.9) > 0.55) continue; // sparse - not every slot gets one
+      const wx = i*240 + hash(i*4.4)*90;
+      const sx = wx - camX;
+      if (sx<-40||sx>W+40) continue;
+      const gy = groundY() - heightAt(wx);
+      const scale = 1.5 + hash(i*6.6)*1.1;
+      drawTree(sx, gy, scale, pal.treeNear, 0.96, hash(i*8.8)>0.85, i);
+    }
+  }
+
+  // Foreground silhouette layer: rounded rocks and grass blades hugging the
+  // very bottom edge, scrolling faster than the terrain (parallax > 1) so
+  // it reads as the closest thing to the camera - a real depth cue rather
+  // than everything sitting at the same apparent distance.
+  function drawForeground(camX, pal){
+    const fx = camX*1.4;
+    ctx.save();
+    ctx.fillStyle = mixHex('#0a0704','#000000',0.15);
+    for (let i=Math.floor(fx/220)-1; i<Math.floor((fx+W)/220)+1; i++){
+      if (hash(i*3.3) > 0.6) continue;
+      const wx = i*220 + hash(i*5.5)*140;
+      const sx = wx - fx;
+      if (sx<-90||sx>W+90) continue;
+      const rr = 24+hash(i*7.7)*32;
+      ctx.beginPath();
+      ctx.ellipse(sx, H+rr*0.3, rr, rr*0.85, 0, Math.PI, 0);
+      ctx.fill();
+    }
+    ctx.strokeStyle = mixHex('#0a0704','#000000',0.1);
+    ctx.lineWidth = 3; ctx.lineCap='round';
+    for (let i=Math.floor(fx/24)-2; i<Math.floor((fx+W)/24)+2; i++){
+      const wx = i*24 + hash(i*9.1)*13;
+      const sx = wx - fx;
+      if (sx<-20||sx>W+20) continue;
+      const bladeH = 16+hash(i*2.3)*24;
+      const lean = (hash(i*6.6)-0.5)*10;
+      ctx.beginPath();
+      ctx.moveTo(sx, H+4);
+      ctx.quadraticCurveTo(sx+lean*0.6, H-bladeH*0.55, sx+lean, H-bladeH);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawTerrain(camX, pal){
+    const gY = groundY();
+    ctx.beginPath(); ctx.moveTo(-10,H+10);
+    const step=6;
+    for (let sx=-10; sx<=W+10; sx+=step){
+      const wx=camX+sx; const y=gY-heightAt(wx);
+      ctx.lineTo(sx,y);
+    }
+    ctx.lineTo(W+10,H+10); ctx.closePath();
+    const grassTop = mixHex(pal.grassTop,'#1c2440', pal.nightAmt*0.55);
+    const grad=ctx.createLinearGradient(0,gY-AMP(),0,H);
+    grad.addColorStop(0, grassTop);
+    grad.addColorStop(0.18, mixHex(pal.grassLow,'#141c30', pal.nightAmt*0.5));
+    grad.addColorStop(0.22, '#4a3626');
+    grad.addColorStop(1,'#20140c');
+    ctx.fillStyle=grad; ctx.fill();
+
+    // grass edge highlight
+    ctx.beginPath();
+    for (let sx=-10; sx<=W+10; sx+=step){
+      const wx=camX+sx; const y=gY-heightAt(wx)-2;
+      if (sx===-10) ctx.moveTo(sx,y); else ctx.lineTo(sx,y);
+    }
+    ctx.strokeStyle = 'rgba(190,230,140,0.35)'; ctx.lineWidth=3; ctx.stroke();
+
+    // flowers scattered on grass edge
+    for (let sx=-10; sx<=W+10; sx+=step){
+      const wx=camX+sx;
+      const hIdx = Math.floor(wx/18);
+      const hv = hash(hIdx*3.3);
+      if (hv>0.90){
+        const y=gY-heightAt(wx)-4;
+        const colors=['#e78ba3','#f2ede0','#c98adf'];
+        ctx.fillStyle = colors[Math.floor(hv*30)%colors.length];
+        ctx.fillRect(sx, y-3, 3,3);
+      }
+    }
+
+    // dirt pebble texture
+    ctx.fillStyle='rgba(0,0,0,0.2)';
+    for (let sx=-10; sx<=W+10; sx+=16){
+      const wx=camX+sx; const y=gY-heightAt(wx);
+      for(let d=16; d<90; d+=15){
+        if (((sx+d)/8|0)%2===0) ctx.fillRect(sx,y+d,3,3);
+      }
+    }
+  }
+
+  // Sisyphus is built as ONE unioned path - every body block, limb segment,
+  // and the head are all appended into a single path (never filled
+  // individually), then clipped and filled ONCE with a single gradient.
+  // That's what makes it read as one continuous sculpted body instead of a
+  // pile of disconnected parts: there's no seam where two separately-filled
+  // shapes with slightly different edges meet.
+  function drawFigure(gx,gy,theta,pose,speed){
+    const R = ROCKR();
+    const s = Math.max(2, Math.min(PX*1.15, R*0.155));
+    ctx.save();
+    ctx.translate(gx,gy);
+    ctx.rotate(theta);
+
+    function rectPath(bx,by,bw,bh){ ctx.rect(Math.round(bx*s), Math.round(by*s), Math.ceil(bw*s), Math.ceil(bh*s)); }
+    function circPath(cx,cy,r){ ctx.moveTo((cx+r)*s, cy*s); ctx.arc(cx*s, cy*s, r*s, 0, Math.PI*2); }
+    // one hinged limb segment appended into the current path; returns its far
+    // end so a second segment can hinge off it for a real knee/elbow bend.
+    // The small backward overlap (-s*0.4) at the hinge end guarantees it
+    // fuses into the joint it's attached to instead of leaving a hairline gap.
+    function limbPath(hx,hy,len,ang,w){
+      ctx.save();
+      ctx.translate(hx*s, hy*s);
+      ctx.rotate(ang);
+      ctx.rect(Math.round(-w*s/2), -s*0.4, Math.ceil(w*s), Math.ceil(len*s)+Math.ceil(s*0.4));
+      ctx.restore();
+      return { x: hx - len*Math.sin(ang), y: hy + len*Math.cos(ang) };
+    }
+
+    ctx.beginPath();
+
+    if (pose==='fallback'){
+      ctx.save(); ctx.rotate(0.75);
+      rectPath(-6,-3,7,4);
+      circPath(-8.6,-2.2,1.9);
+      rectPath(-2,-4,5,3);
+      rectPath(-7,1,4,3); rectPath(-2,1,5,3);
+      ctx.restore();
+    } else {
+      const lean = 0.16 + Math.min(0.34, speed*0.00035);
+      ctx.rotate(lean);
+
+      const phase = walkCycle % 1;
+      const stride = pose==='push' ? 1 : 0.3;
+      const backAng  = Math.sin(phase*Math.PI*2) * 0.55 * stride;
+      const frontAng = Math.sin(phase*Math.PI*2 + Math.PI) * 0.55 * stride;
+      const bob = Math.abs(Math.sin(phase*Math.PI*2)) * (pose==='push' ? 0.7 : 0.2);
+      const hipY = -1.6-bob;
+
+      // legs: hip -> knee -> foot, two hinged segments each
+      const kneeB = limbPath(-3.7, hipY, 3.3, backAng*0.55, 2.6);
+      limbPath(kneeB.x, kneeB.y, 3.3, backAng*1.25, 2.3);
+      const kneeF = limbPath(-1.0, hipY, 3.3, frontAng*0.55, 2.7);
+      limbPath(kneeF.x, kneeF.y, 3.3, frontAng*1.25, 2.4);
+
+      // torso: pelvis -> hips -> ribcage -> shoulders, each block overlapping
+      // the next so the whole spine reads as one continuous, hunched form
+      rectPath(-7.0, -5.3-bob, 6.4, 3.8);   // pelvis - bridges straight down to the leg hinges
+      rectPath(-6.8, -8.7-bob, 5.0, 3.6);   // hips / lower back
+      rectPath(-7.0, -11.6-bob, 5.6, 3.2);  // ribcage
+      rectPath(-6.4, -13.6-bob, 4.4, 2.6);  // shoulders
+
+      // head - round, tucked down into the effort
+      circPath(-7.3, -14.9-bob, 2.1);
+
+      // arms: trailing arm bent back and braced, leading arm flat into the boulder
+      limbPath(-6.5, -12.6-bob, 3.4, -1.9, 2.0);
+      rectPath(-1.6, -11.6-bob, 7.2, 2.4);
+    }
+
+    // fill the whole unioned silhouette once, with a single gradient, so
+    // every part shares identical lighting - a sculpted look rather than
+    // flat-black cutout parts stitched together
+    ctx.save();
+    ctx.clip();
+    const grad = ctx.createLinearGradient(-9*s,-18*s,4*s,9*s);
+    grad.addColorStop(0,'#3e2c1d');
+    grad.addColorStop(0.42,'#1b130c');
+    grad.addColorStop(1,'#050403');
+    ctx.fillStyle = grad;
+    ctx.fillRect(-16*s,-20*s,32*s,32*s);
+    // a soft rim of warm light along the sun-facing edge, confined to the clip
+    ctx.globalAlpha=0.4; ctx.strokeStyle='rgba(255,224,175,0.7)'; ctx.lineWidth=Math.max(1,s*0.35);
+    ctx.beginPath(); ctx.moveTo(-7.2*s,-16*s); ctx.lineTo(-6.6*s,-4*s); ctx.stroke();
+    ctx.globalAlpha=1;
+    ctx.restore();
+
+    ctx.restore();
+  }
+
+  function drawRock(gx,gy,angle){
+    const R=ROCKR();
+    ctx.save(); ctx.translate(gx,gy);
+
+    // contact shadow where it meets the slope, grounds the rock instead of
+    // letting it read as a flat sticker sitting on top of the terrain
+    ctx.save();
+    ctx.beginPath(); ctx.ellipse(R*0.12, R*0.86, R*0.92, R*0.28, 0, 0, Math.PI*2);
+    ctx.fillStyle='rgba(10,8,6,0.38)'; ctx.fill();
+    ctx.restore();
+
+    // base form: directional light from upper-left, like real weathered stone
+    const grad=ctx.createRadialGradient(-R*0.38,-R*0.42,R*0.1,R*0.1,R*0.15,R*1.35);
+    grad.addColorStop(0,'#bba98c'); grad.addColorStop(0.32,'#9c876a');
+    grad.addColorStop(0.68,'#7a6650'); grad.addColorStop(1,'#3c2f24');
+    ctx.beginPath(); ctx.arc(0,0,R,0,Math.PI*2); ctx.fillStyle=grad; ctx.fill();
+
+    // everything past this clip stays inside the rock's silhouette
+    ctx.save();
+    ctx.beginPath(); ctx.arc(0,0,R,0,Math.PI*2); ctx.clip();
+    ctx.rotate(angle);
+
+    // mottled grain: many small hashed noise blotches at varying tone/alpha,
+    // the way real granite reads as speckled rather than smoothly shaded
+    for (let i=0;i<26;i++){
+      const a=hash(i*3.7+1)*Math.PI*2, rr=hash(i*5.1+2)*R*0.92;
+      const px=Math.cos(a)*rr, py=Math.sin(a)*rr;
+      const br=R*(0.05+hash(i*7.3)*0.11);
+      const dark = hash(i*9.9) > 0.5;
+      ctx.fillStyle = dark ? 'rgba(35,26,18,0.24)' : 'rgba(210,196,170,0.16)';
+      ctx.beginPath(); ctx.arc(px,py,br,0,Math.PI*2); ctx.fill();
+    }
+
+    // deep organic crack grooves (irregular, not perfect arcs) plus one long fissure
+    ctx.strokeStyle='rgba(35,25,16,0.6)'; ctx.lineWidth=R*0.045; ctx.lineCap='round';
+    for (let i=0;i<3;i++){
+      const a0=i*2.3+0.4, r0=R*(0.15+i*0.07);
+      ctx.beginPath();
+      let px=Math.cos(a0)*r0, py=Math.sin(a0)*r0;
+      ctx.moveTo(px,py);
+      for (let k=1;k<=4;k++){
+        const a=a0+k*0.42+ (hash(i*13+k)-0.5)*0.3;
+        const r=r0+ k*R*0.13*(0.7+hash(i*17+k)*0.6);
+        px=Math.cos(a)*r; py=Math.sin(a)*r;
+        ctx.lineTo(px,py);
+      }
+      ctx.stroke();
+    }
+
+    // pitted pockmarks for close-up rock detail
+    ctx.fillStyle='rgba(28,20,14,0.45)';
+    [[R*0.25,-R*0.35,R*0.12],[-R*0.4,R*0.05,R*0.09],[R*0.1,R*0.42,R*0.08],[-R*0.15,-R*0.55,R*0.06]].forEach(([cx,cy,r])=>{
+      ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
+    });
+
+    ctx.restore(); // end clip+rotation
+
+    // crisp rim + a soft highlight streak catching the light
+    ctx.lineWidth=2; ctx.strokeStyle='#241a12';
+    ctx.beginPath(); ctx.arc(0,0,R,0,Math.PI*2); ctx.stroke();
+    ctx.save();
+    ctx.globalAlpha=0.35; ctx.strokeStyle='#e9dcc0'; ctx.lineWidth=R*0.16; ctx.lineCap='round';
+    ctx.beginPath(); ctx.arc(0,0,R*0.62,Math.PI*1.08,Math.PI*1.42); ctx.stroke();
+    ctx.restore();
+
+    ctx.restore();
+  }
+
+  function render(){
+    // draw the whole frame into the small pixel-art buffer first
+    ctx = bctx;
+    ctx.clearRect(0,0,W,H);
+    let camX = x - W*0.32;
+    if (shakeTimer>0){ ctx.save(); ctx.translate((Math.random()-0.5)*8*shakeTimer/0.35,(Math.random()-0.5)*8*shakeTimer/0.35); }
+
+    const pal=getPalette();
+    drawBackground(camX, pal);
+    drawTerrain(camX, pal);
+
+    const gY=groundY(); const rockScreenX=W*0.32; const R=ROCKR();
+    const rockGY = gY - heightAt(x) - R*0.72;
+    const figWorldX = x - R*2.0;
+    const figScreenX = rockScreenX - R*2.0;
+    const figGY = gY - heightAt(figWorldX);
+    const figTheta = Math.atan(slopeAt(figWorldX));
+    const pose = state==='over' ? 'fallback' : (tapPoseTimer>0?'push':'stand');
+    drawFigure(figScreenX, figGY, figTheta, pose, Math.abs(vx));
+    drawRock(rockScreenX, rockGY, rotAngle);
+
+    particles.forEach(p=>{
+      const alpha=1-p.age/p.life;
+      ctx.fillStyle=p.color; ctx.globalAlpha=Math.max(0,alpha);
+      ctx.fillRect(p.x,p.y,4,4); ctx.globalAlpha=1;
+    });
+
+    drawForeground(camX, pal);
+
+    if (flashTimer>0){ ctx.fillStyle=`rgba(255,217,61,${flashTimer/0.10*0.3})`; ctx.fillRect(0,0,W,H); }
+    if (shakeTimer>0) ctx.restore();
+
+    // blit the low-res buffer up to full size, unsmoothed, for the chunky pixel-art look
+    ctx = octx;
+    octx.imageSmoothingEnabled = false;
+    octx.clearRect(0,0,W,H);
+    octx.drawImage(bufCanvas, 0,0,bufW,bufH, 0,0,W,H);
+  }
+
+  function loop(ts){
+    if (lastTime===null) lastTime=ts;
+    let dt=(ts-lastTime)/1000; if (dt>0.05) dt=0.05; lastTime=ts;
+    update(dt); render();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
