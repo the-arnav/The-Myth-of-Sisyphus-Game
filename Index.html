@@ -383,6 +383,24 @@
   // it satisfies the gesture requirement by itself. Only playerB genuinely
   // needs a throwaway unlock, since its real first use (the first crossfade)
   // happens later, outside any gesture.
+  //
+  // THE MOBILE-ONLY VERSION OF THIS BUG: even after the fix above, doTap()
+  // still called unlockAudioPlayers() FIRST, immediately before startGame()
+  // (in the same synchronous tap). On desktop that's harmless - but on
+  // mobile browsers, kicking off TWO <audio> elements' play() calls back to
+  // back in the same gesture (playerB's muted unlock play, then playerA's
+  // real play) makes them contend for the same mobile audio session right
+  // as it's being initialized, and it's playerA's real, audible play() that
+  // silently loses that race and gets swallowed by its bare .catch(()=>{}).
+  // Desktop browsers don't have this contention, which is exactly why "PC
+  // is fine." Pausing and resuming "fixed" it only because, by then,
+  // unlockAudioPlayers() had already run to completion and wasn't firing
+  // at the same instant as the real play() call anymore.
+  // Fix: give the REAL track's play() call sole, uncontended use of the
+  // gesture - unlockAudioPlayers() now only runs afterward (chained off
+  // that play() settling, muted playback doesn't need its own gesture at
+  // all), and if the real play() is ever rejected anyway, it's retried
+  // automatically instead of failing silently.
   let audioUnlocked = false;
   function unlockAudioPlayers(){
     if (audioUnlocked) return;
@@ -408,11 +426,23 @@
 
   // Kicks off the playlist from track 0. Only runs once, the first time
   // music is ever started (later starts just resume where things left off).
+  // The real play() call gets the gesture to itself - playerB's throwaway
+  // unlock is deferred until right after, never run at the same instant.
+  // If the real play() is rejected (mobile networks / audio-session hiccups),
+  // it gets one automatic retry a beat later instead of staying silent.
   function startPlaylist(){
     currentTrackIndex = 0;
     loadTrack(activePlayer, 0);
     activePlayer.volume = BG_MUSIC_VOLUME;
-    activePlayer.play().catch(()=>{}); // caught: harmless if a placeholder path 404s
+    const attempt = activePlayer.play();
+    const afterAttempt = (ok)=>{
+      if (!ok){
+        setTimeout(()=>{ activePlayer.play().catch(()=>{}); }, 250);
+      }
+      setTimeout(unlockAudioPlayers, 60);
+    };
+    if (attempt && attempt.then) attempt.then(()=>afterAttempt(true)).catch(()=>afterAttempt(false));
+    else afterAttempt(true);
   }
 
   function playMusic(){
@@ -622,7 +652,6 @@
   const TAP_IMPULSE_BASE = 158 / Math.sqrt(DIFFICULTY); // how much speed one good tap gives - lower = harder
   const REF_INTERVAL = 232 / Math.sqrt(DIFFICULTY);     // ms - taps faster than this get a bonus, slower a penalty; smaller = harder
   function doTap(){
-    unlockAudioPlayers();
     if (state==='start' || state==='over'){ startGame(); return; }
     if (state==='paused'){ resumeGame(); return; }
     if (state!=='playing') return;
