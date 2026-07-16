@@ -22,6 +22,7 @@
   .hud { position: absolute; top: 0; left: 0; right: 0; padding: 14px 16px; z-index: 5;
     display: flex; align-items: flex-start; justify-content: space-between; pointer-events: none;
     padding-top: max(14px, env(safe-area-inset-top)); }
+  .hud-left { display: flex; gap: 8px; }
   .icon-btn {
     width: 34px; height: 34px; border-radius: 9px;
     background: rgba(15,12,20,0.38); border: 1px solid rgba(255,255,255,0.18);
@@ -96,8 +97,55 @@
 <div id="wrap">
   <canvas id="game"></canvas>
 
+  <!--
+    ============================================================
+    BACKGROUND MUSIC - 5-song playlist that crossfades between tracks
+    ============================================================
+    Unlike a single <source src="..."> tag, the 5 song paths are now
+    set in ONE PLACE in the JavaScript below: look for the
+    "MUSIC_TRACKS" array (search for SONG_PATH_PLACEHOLDER_1) and
+    replace each placeholder string with a path to a real file, e.g.:
+
+        const MUSIC_TRACKS = [
+          'audio/track1.mp3',
+          'audio/track2.mp3',
+          'audio/track3.mp3',
+          'audio/track4.mp3',
+          'audio/track5.mp3',
+        ];
+
+    Steps:
+      1. Add 5 audio files to your repo, e.g. in an "audio/" folder.
+      2. Edit MUSIC_TRACKS in the JS (search this file for
+         SONG_PATH_PLACEHOLDER_1) and swap in your 5 file paths.
+      3. git add, commit, push to GitHub.
+      4. If your GitHub repo is linked to Netlify, that's it - it
+         auto-builds and deploys on every push. (Manual drag-and-drop
+         Netlify site instead of a linked repo? Re-drag the whole
+         updated project folder, including the audio files.)
+
+    Paths can also be full external URLs instead of local files.
+    You don't need exactly 5 - add or remove entries from the array
+    and it still works - but the prompt asked for 5, so 5 placeholders
+    are here.
+
+    Two <audio> elements (not one) are used below because a real
+    crossfade needs BOTH the outgoing and incoming track playing at
+    the same time, briefly, while one fades down and the other fades
+    up. Their "src" is set entirely from JS, not here, so there's
+    nothing to edit in this HTML block itself - only the JS array.
+    Neither has "loop": with 5 songs to cycle through, looping a
+    single track would stop it from ever advancing to the next one -
+    the JS below handles advancing/looping across the whole playlist.
+  -->
+  <audio id="bgMusicA" preload="auto"></audio>
+  <audio id="bgMusicB" preload="auto"></audio>
+
   <div class="hud">
-    <div class="icon-btn" id="pauseBtn">❚❚</div>
+    <div class="hud-left">
+      <div class="icon-btn" id="muteBtn" title="Mute music">♪</div>
+      <div class="icon-btn" id="pauseBtn">❚❚</div>
+    </div>
     <div class="hud-center" id="titleWatermark">MYTH&nbsp;OF&nbsp;SISYPHUS</div>
     <div class="hud-right">
       <div class="dist"><span id="distVal">0000</span>m</div>
@@ -209,6 +257,7 @@
   let lastValleyIndex=0, failBaseX=-99999;
   let flashTimer=0, shakeTimer=0, particles=[];
   let rotAngle=0, elapsed=0, lastTime=null, walkCycle=0;
+  let figThetaSmooth=0, lastDt=1/60;
   let lastMilestone=-1;
   let milestoneEl=null, milestoneTimer=0, milestoneWorldX=0, milestoneWorldY=0;
 
@@ -274,6 +323,129 @@
     if (window.storage && window.storage.set){ window.storage.set('sisyphus-best-m', String(bestM)).catch(()=>{}); }
   }
 
+  // ============================================================
+  // BACKGROUND MUSIC CONTROL - 5-song playlist with crossfade
+  // ============================================================
+  // Browsers block audio-with-sound from autoplaying before the user
+  // has interacted with the page at all - that's why playback is only
+  // ever kicked off from inside startGame()/resumeGame(), which only
+  // run in response to an actual tap/click/keypress. Starting it on
+  // page load instead would silently fail in most browsers.
+
+  // ---- EDIT HERE: your 5 song file paths go in this array ----
+  const MUSIC_TRACKS = [
+    'SONG_PATH_PLACEHOLDER_1',
+    'SONG_PATH_PLACEHOLDER_2',
+    'SONG_PATH_PLACEHOLDER_3',
+    'SONG_PATH_PLACEHOLDER_4',
+    'SONG_PATH_PLACEHOLDER_5',
+  ];
+  const BG_MUSIC_VOLUME = 0.35;   // 0 = silent, 1 = full volume. Kept low so it sits behind UI, not over it.
+  const CROSSFADE_SECONDS = 3;    // how long the fade-out/fade-in overlap lasts between songs
+
+  // Two players so the outgoing and incoming track can play at the same
+  // time during the crossfade (one <audio> element can only play one
+  // thing at once, which is why a single fade-out/fade-in needs two).
+  const playerA = document.getElementById('bgMusicA');
+  const playerB = document.getElementById('bgMusicB');
+  let activePlayer = playerA, idlePlayer = playerB;
+  let currentTrackIndex = -1; // -1 = playlist hasn't started yet
+  let crossfading = false;
+  let fadeRAF = null;
+  let musicMuted = false;
+  const muteBtn = document.getElementById('muteBtn');
+
+  function loadTrack(player, index){
+    player.src = MUSIC_TRACKS[index];
+    player.load();
+    player.currentTime = 0;
+    player.volume = 0;
+  }
+
+  // Kicks off the playlist from track 0. Only runs once, the first time
+  // music is ever started (later starts just resume where things left off).
+  function startPlaylist(){
+    currentTrackIndex = 0;
+    loadTrack(activePlayer, 0);
+    activePlayer.volume = BG_MUSIC_VOLUME;
+    activePlayer.play().catch(()=>{}); // caught: harmless if a placeholder path 404s
+  }
+
+  function playMusic(){
+    if (currentTrackIndex === -1){ startPlaylist(); return; }
+    activePlayer.play().catch(()=>{});
+    if (crossfading) idlePlayer.play().catch(()=>{});
+  }
+  function pauseMusic(){
+    // If the game is paused mid-crossfade, cleanly abort the fade back to
+    // the track that was already playing rather than leaving both players
+    // stuck at half volume.
+    if (crossfading){
+      cancelAnimationFrame(fadeRAF);
+      idlePlayer.pause(); idlePlayer.volume = 0;
+      activePlayer.volume = BG_MUSIC_VOLUME;
+      crossfading = false;
+    }
+    activePlayer.pause();
+  }
+
+  // Fades the current song out and the next one in over CROSSFADE_SECONDS,
+  // then swaps which player is "active" so the cycle can repeat.
+  function beginCrossfade(){
+    if (crossfading) return;
+    crossfading = true;
+    const nextIndex = (currentTrackIndex + 1) % MUSIC_TRACKS.length;
+    loadTrack(idlePlayer, nextIndex);
+    idlePlayer.play().catch(()=>{});
+    const fromPlayer = activePlayer, toPlayer = idlePlayer;
+    const startTime = performance.now();
+    (function step(now){
+      const t = Math.min(1, (now - startTime) / (CROSSFADE_SECONDS * 1000));
+      fromPlayer.volume = BG_MUSIC_VOLUME * (1 - t);
+      toPlayer.volume = BG_MUSIC_VOLUME * t;
+      if (t < 1){ fadeRAF = requestAnimationFrame(step); return; }
+      fromPlayer.pause();
+      activePlayer = toPlayer; idlePlayer = fromPlayer;
+      currentTrackIndex = nextIndex;
+      crossfading = false;
+    })(startTime);
+  }
+
+  // Starts the crossfade a few seconds before the current song ends.
+  function handleTimeUpdate(e){
+    const p = e.target;
+    if (p !== activePlayer || crossfading) return;
+    if (isFinite(p.duration) && p.duration > 0 && p.duration - p.currentTime <= CROSSFADE_SECONDS){
+      beginCrossfade();
+    }
+  }
+  // Fallback for a track whose duration wasn't known in time to trigger the
+  // crossfade above (e.g. a slow-loading file) - just hard-cut to the next
+  // song instead of the whole playlist silently stalling.
+  function handleEnded(e){
+    if (e.target !== activePlayer || crossfading) return;
+    const nextIndex = (currentTrackIndex + 1) % MUSIC_TRACKS.length;
+    loadTrack(activePlayer, nextIndex);
+    activePlayer.volume = BG_MUSIC_VOLUME;
+    activePlayer.play().catch(()=>{});
+    currentTrackIndex = nextIndex;
+  }
+  [playerA, playerB].forEach(p=>{
+    p.addEventListener('timeupdate', handleTimeUpdate);
+    p.addEventListener('ended', handleEnded);
+  });
+
+  muteBtn.addEventListener('pointerdown', e=>{
+    e.preventDefault(); e.stopPropagation();
+    musicMuted = !musicMuted;
+    muteBtn.textContent = musicMuted ? '✕' : '♪';
+    // .muted silences instantly without touching playback/position or the
+    // crossfade's own volume animation, and un-muting needs no fresh user
+    // gesture since playback never actually stopped.
+    playerA.muted = musicMuted;
+    playerB.muted = musicMuted;
+  });
+
   const distEl=document.getElementById('distVal'), bestEl=document.getElementById('bestVal');
   function updateHud(){ distEl.textContent=String(distM).padStart(4,'0'); bestEl.textContent=String(bestM).padStart(4,'0'); }
 
@@ -288,6 +460,7 @@
     document.getElementById('overScreen').classList.add('hidden');
     document.getElementById('pauseScreen').classList.add('hidden');
     document.getElementById('hint').style.opacity='1';
+    playMusic();
   }
   function endGame(){
     state='over';
@@ -298,6 +471,8 @@
     document.getElementById('quoteText').textContent = gameOverQuotes[Math.floor(Math.random()*gameOverQuotes.length)];
     document.getElementById('overScreen').classList.remove('hidden');
     shakeTimer=0.35;
+    // Music keeps playing softly through the game-over screen (ambient, not
+    // tied strictly to "playing" state) - only the pause button stops it.
   }
 
   function spawnBurst(px_,py_,color,n){
@@ -352,8 +527,8 @@
     }
   });
 
-  function pauseGame(){ if(state!=='playing') return; state='paused'; document.getElementById('pauseScreen').classList.remove('hidden'); }
-  function resumeGame(){ state='playing'; document.getElementById('pauseScreen').classList.add('hidden'); lastTime=null; }
+  function pauseGame(){ if(state!=='playing') return; state='paused'; document.getElementById('pauseScreen').classList.remove('hidden'); pauseMusic(); }
+  function resumeGame(){ state='playing'; document.getElementById('pauseScreen').classList.add('hidden'); lastTime=null; playMusic(); }
   document.getElementById('pauseBtn').addEventListener('pointerdown', e=>{
     e.preventDefault(); e.stopPropagation();
     if (state==='playing') pauseGame(); else if (state==='paused') resumeGame();
@@ -897,9 +1072,12 @@
 
       const phase = walkCycle % 1;
       const stride = pose==='push' ? 1 : 0.3;
-      const backAng  = Math.sin(phase*Math.PI*2) * 0.55 * stride;
-      const frontAng = Math.sin(phase*Math.PI*2 + Math.PI) * 0.55 * stride;
-      const bob = Math.abs(Math.sin(phase*Math.PI*2)) * (pose==='push' ? 0.7 : 0.2);
+      // Both the leg-swing angle and the vertical bob were tuned down from their
+      // original values (0.55 / 0.7,0.2) - the old numbers made the whole figure
+      // read as swaying and bouncing rather than walking with real weight.
+      const backAng  = Math.sin(phase*Math.PI*2) * 0.4 * stride;
+      const frontAng = Math.sin(phase*Math.PI*2 + Math.PI) * 0.4 * stride;
+      const bob = Math.abs(Math.sin(phase*Math.PI*2)) * (pose==='push' ? 0.35 : 0.1);
       const hipY = -1.6-bob;
 
       // legs: hip -> knee -> foot, two hinged segments each
@@ -1024,10 +1202,22 @@
 
     const gY=groundY(); const rockScreenX=W*0.32; const R=ROCKR();
     const rockGY = gY - heightAt(x) - R*0.72;
-    const figWorldX = x - R*2.0;
-    const figScreenX = rockScreenX - R*2.0;
+    // How far behind the boulder Sisyphus stands. This used to be R*2.0, which
+    // left a visible gap between his pushing hand and the stone - closer to R*1.2
+    // reads as him actually being in contact with it.
+    const figWorldX = x - R*1.2;
+    const figScreenX = rockScreenX - R*1.2;
     const figGY = gY - heightAt(figWorldX);
-    const figTheta = Math.atan(slopeAt(figWorldX));
+    // The raw terrain slope is noisy (small rocky bumps are baked into the hill
+    // shape for visual texture), so using it directly for the figure's tilt made
+    // him visibly wobble/sway with every little bump. Instead we ease the tilt
+    // toward that target each frame - fast enough to still lean into real slope
+    // changes, slow enough to filter out the jitter - which reads as a steadier,
+    // more physically grounded stance.
+    const figThetaTarget = Math.atan(slopeAt(figWorldX));
+    const smoothK = 1 - Math.pow(0.02, lastDt);
+    figThetaSmooth += (figThetaTarget - figThetaSmooth) * smoothK;
+    const figTheta = figThetaSmooth;
     const pose = state==='over' ? 'fallback' : (tapPoseTimer>0?'push':'stand');
     drawFigure(figScreenX, figGY, figTheta, pose, Math.abs(vx));
     drawRock(rockScreenX, rockGY, rotAngle);
@@ -1053,6 +1243,7 @@
   function loop(ts){
     if (lastTime===null) lastTime=ts;
     let dt=(ts-lastTime)/1000; if (dt>0.05) dt=0.05; lastTime=ts;
+    lastDt = dt;
     update(dt); render();
     requestAnimationFrame(loop);
   }
