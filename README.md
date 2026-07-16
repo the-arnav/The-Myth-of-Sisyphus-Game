@@ -84,6 +84,7 @@ No dependencies, no package manager, no build tools required.
 - Concept & design: inspired by Albert Camus's *The Myth of Sisyphus*.
 - Game-over quotes are original lines written in the spirit of the essay's themes (the absurd, revolt, and persistence), not direct quotations.
 - Built as an experimental single-file browser game.
+- Creator - Arnav Gare
 
 ## Play it here
 
