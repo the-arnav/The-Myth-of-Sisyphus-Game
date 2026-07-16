@@ -212,10 +212,21 @@
   // ---------- terrain / physics ----------
   const P = 560;
   function AMP(){ return H*0.22; }
-  const BASE_G = 1650, DRAG = 0.80;
-  const MAX_V = 560, MIN_V = -420;
+
+  // ============================================================
+  // DIFFICULTY - the one knob to fine-tune game feel
+  // ============================================================
+  // 1.0 = the current tuning. Try 0.7 for an easier feel, 1.3+ for a
+  // harder one. Every difficulty-related constant below is derived from
+  // this single number, so you only ever need to change this one line
+  // and re-test, instead of hunting through five separate constants.
+  const DIFFICULTY = 1.0;
+
+  const BASE_G = 1650 * DIFFICULTY;              // how hard the slope pulls the boulder back - higher = harder
+  const DRAG   = 0.80 * DIFFICULTY;              // how fast speed bleeds off between taps - higher = harder
+  const FAIL_MARGIN = 58 / DIFFICULTY;           // how far you can slip before it's game over - smaller = harder
+  const MAX_V = 560, MIN_V = -420;               // hard velocity caps - not difficulty-scaled on purpose
   function ROCKR(){ return Math.max(18, H*0.032); }
-  const FAIL_MARGIN = 58;
   const M_PER_PX = 1/14; // meters conversion
   function groundY(){ return H*0.66; }
   function hillAmp(n){ return AMP() * (0.42 + hash(n*3.73)*1.0); } // some mountains higher, some lower
@@ -575,8 +586,8 @@
   // Each tap gives a velocity kick. Tap FAST and the kicks land before gravity
   // eats the last one, so the boulder climbs. Tap SLOW and gravity wins the gap
   // between kicks, so it recedes. Holding down does nothing - only distinct taps count.
-  const TAP_IMPULSE_BASE = 158;
-  const REF_INTERVAL = 232; // ms - taps faster than this get a bonus, slower get a penalty
+  const TAP_IMPULSE_BASE = 158 / Math.sqrt(DIFFICULTY); // how much speed one good tap gives - lower = harder
+  const REF_INTERVAL = 232 / Math.sqrt(DIFFICULTY);     // ms - taps faster than this get a bonus, slower a penalty; smaller = harder
   function doTap(){
     unlockAudioPlayers();
     if (state==='start' || state==='over'){ startGame(); return; }
@@ -618,7 +629,7 @@
     elapsed += dt;
     if (state!=='playing'){ rotAngle += dt*0.35; return; }
 
-    const difficulty = Math.min(1 + distM*0.0013, 1.85);
+    const difficulty = Math.min(1 + distM*0.0013*DIFFICULTY, 1 + 0.85*DIFFICULTY);
     const theta = Math.atan(slopeAt(x));
     let a = -BASE_G*difficulty*Math.sin(theta);
     a -= DRAG*vx;
