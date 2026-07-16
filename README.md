@@ -1,5 +1,5 @@
 # Gameplay Images :
-<img width="500" height="500" alt="Screenshot (56)" src="https://github.com/user-attachments/assets/8f4ec2ee-279f-4e50-bb93-5ab341e3c06a" />
+<img width="192" height="108" alt="Screenshot (56)" src="https://github.com/user-attachments/assets/8f4ec2ee-279f-4e50-bb93-5ab341e3c06a" />
 <img width="875" height="729" alt="Screenshot (59)" src="https://github.com/user-attachments/assets/1ca8ca6e-b220-4e98-9c35-878b107d929b" />
 <img width="1920" height="981" alt="Screenshot (58)" src="https://github.com/user-attachments/assets/ac524d43-76e7-405d-9a59-e3aba514026e" />
 <img width="1920" height="1200" alt="Screenshot (57)" src="https://github.com/user-attachments/assets/3f1fc95a-ebe4-43bd-9368-1aea4c46f635" />
