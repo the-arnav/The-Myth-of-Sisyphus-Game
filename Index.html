@@ -355,6 +355,7 @@
   ];
   const BG_MUSIC_VOLUME = 0.35;   // 0 = silent, 1 = full volume. Kept low so it sits behind UI, not over it.
   const CROSSFADE_SECONDS = 3;    // how long the fade-out/fade-in overlap lasts between songs
+  const FALLBACK_CROSSFADE_SECONDS = 1.2; // shorter crossfade used by ended/error/watchdog recovery paths
 
   // Two players so the outgoing and incoming track can play at the same
   // time during the crossfade (one <audio> element can only play one
@@ -543,16 +544,30 @@
   // Fallback for a track whose duration wasn't known in time to trigger the
   // crossfade above (e.g. a slow-loading file) - just hard-cut to the next
   // song instead of the whole playlist silently stalling.
+  // Both natural end-of-track and load/decode errors now route through the
+  // SAME crossTo() path a real skip uses, wrapped in its own try/catch -
+  // so even the fallback cases still fade smoothly into the next track
+  // instead of hard-cutting, and any unexpected exception can't leave the
+  // playlist stuck in silence (recovers by starting the next track directly).
+  function safeAdvance(nextIndex, seconds){
+    try {
+      crossTo(nextIndex, seconds);
+    } catch(e){
+      try {
+        crossfading = false;
+        currentTrackIndex = nextIndex;
+        loadTrack(activePlayer, nextIndex);
+        activePlayer.volume = BG_MUSIC_VOLUME;
+        activePlayer.play().catch(()=>{});
+      } catch(e2){}
+    }
+  }
   function handleEnded(e){
     if (e.target !== activePlayer || crossfading) return;
-    const nextIndex = (currentTrackIndex + 1) % MUSIC_TRACKS.length;
-    loadTrack(activePlayer, nextIndex);
-    activePlayer.volume = BG_MUSIC_VOLUME;
-    activePlayer.play().catch(()=>{});
-    currentTrackIndex = nextIndex;
+    safeAdvance((currentTrackIndex + 1) % MUSIC_TRACKS.length, FALLBACK_CROSSFADE_SECONDS);
   }
   // If a track's file 404s or otherwise fails to decode, don't just go silent
-  // for the rest of the run - move on to the next track. skipAttempts caps
+  // for the rest of the run - crossfade on to the next track. skipAttempts caps
   // how many times this can chain in a row, in case every path is broken.
   let skipAttempts = 0;
   function handleError(e){
@@ -560,11 +575,7 @@
     if (p !== activePlayer) return;
     if (skipAttempts >= MUSIC_TRACKS.length) return; // every track failed - stop trying
     skipAttempts++;
-    const nextIndex = (currentTrackIndex + 1) % MUSIC_TRACKS.length;
-    loadTrack(activePlayer, nextIndex);
-    activePlayer.volume = BG_MUSIC_VOLUME;
-    activePlayer.play().catch(()=>{});
-    currentTrackIndex = nextIndex;
+    safeAdvance((currentTrackIndex + 1) % MUSIC_TRACKS.length, FALLBACK_CROSSFADE_SECONDS);
   }
   [playerA, playerB].forEach(p=>{
     p.addEventListener('timeupdate', handleTimeUpdate);
@@ -572,6 +583,28 @@
     p.addEventListener('error', handleError);
     p.addEventListener('playing', ()=>{ skipAttempts = 0; });
   });
+
+  // ---- Watchdog: covers the case where playback silently stalls without
+  // ever firing 'error' or 'ended' (a browser audio-session hiccup) - the
+  // exact symptom of "music just stops until you manually click next".
+  // If the active track's clock hasn't moved for a few checks in a row
+  // while it's supposed to be playing, force the crossfade onward.
+  let wdLastTime = -1, wdStallCount = 0;
+  setInterval(()=>{
+    if (state!=='playing' || musicMuted || currentTrackIndex===-1 || crossfading){ wdStallCount = 0; return; }
+    if (activePlayer.paused){
+      wdStallCount++;
+      if (wdStallCount>=2){ wdStallCount=0; safeAdvance(currentTrackIndex, 0.4); }
+      return;
+    }
+    if (activePlayer.currentTime === wdLastTime){
+      wdStallCount++;
+      if (wdStallCount>=3){ wdStallCount=0; safeAdvance((currentTrackIndex+1)%MUSIC_TRACKS.length, FALLBACK_CROSSFADE_SECONDS); }
+    } else {
+      wdStallCount = 0;
+    }
+    wdLastTime = activePlayer.currentTime;
+  }, 1500);
 
   // manual "skip to next song" - used by the next-track button. A short,
   // snappy fade (not the long end-of-song one) so rapid repeated clicks each
@@ -968,20 +1001,55 @@
     const s = f*f*(3-2*f);
     return (h0*(1-s)+h1*s)*amp;
   }
-  function drawMountainLayer(camX, parallax, seedBase, freq, amp, baseY, color, alpha, snowAmt){
+  // Layers a few noise octaves together (each roughly double the frequency
+  // and half the amplitude of the last) instead of one smooth single-octave
+  // ridge - real mountain silhouettes have both a big overall shape AND
+  // smaller jagged sub-peaks riding on top of it, which one octave of value
+  // noise can't produce on its own. Normalized back to the requested `amp`
+  // so callers don't need to re-tune amplitude when octaves change.
+  function fbmRidge(seedBase, wx, freq, amp, octaves){
+    let total=0, amplitude=amp, frequency=freq, maxAmp=0;
+    for (let o=0; o<octaves; o++){
+      total += ridgeHeight(seedBase+o*91.7, wx, frequency, amplitude);
+      maxAmp += amplitude;
+      amplitude *= 0.52;
+      frequency *= 2.15;
+    }
+    return maxAmp>0 ? total*(amp/maxAmp) : 0;
+  }
+  function drawMountainLayer(camX, parallax, seedBase, freq, amp, baseY, color, alpha, snowAmt, octaves){
+    octaves = octaves || 3;
     ctx.save();
     ctx.globalAlpha = alpha;
     const step = 10, px = camX*parallax;
     ctx.beginPath(); ctx.moveTo(-10,H+10);
     for (let sx=-10; sx<=W+10; sx+=step){
-      const y = baseY - ridgeHeight(seedBase, px+sx, freq, amp);
+      const y = baseY - fbmRidge(seedBase, px+sx, freq, amp, octaves);
       ctx.lineTo(sx,y);
     }
     ctx.lineTo(W+10,H+10); ctx.closePath();
+    // three-stop gradient (was two) - a brighter sunlit crest, a neutral
+    // mid-face, and a slightly darkened base, so each range reads as a lit
+    // 3D form instead of a flat silhouette wash
     const grad = ctx.createLinearGradient(0, baseY-amp, 0, baseY);
-    grad.addColorStop(0, mixHex(color,'#ffffff',0.14));
-    grad.addColorStop(1, color);
+    grad.addColorStop(0, mixHex(color,'#ffffff',0.20));
+    grad.addColorStop(0.45, mixHex(color,'#ffffff',0.05));
+    grad.addColorStop(1, mixHex(color,'#000000',0.10));
     ctx.fillStyle = grad; ctx.fill();
+
+    // a thin bright rim tracing the ridgeline itself, the way real peaks
+    // catch a hard edge of light against the sky - snowy crests get a cool
+    // white edge, bare rock gets a warm one
+    ctx.save();
+    ctx.beginPath();
+    for (let sx=-10; sx<=W+10; sx+=step){
+      const y = baseY - fbmRidge(seedBase, px+sx, freq, amp, octaves);
+      if (sx===-10) ctx.moveTo(sx,y); else ctx.lineTo(sx,y);
+    }
+    ctx.strokeStyle = snowAmt>0.3 ? 'rgba(255,255,255,0.5)' : 'rgba(255,238,200,0.32)';
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    ctx.restore();
 
     // clip everything past this point to the mountain silhouette itself, so
     // grain/crevice texture never spills onto the sky
@@ -991,7 +1059,7 @@
     // speckle-grain rock texture - the same "mottled stone" trick used on the
     // boulder, scattered across the whole range so it reads as weathered rock
     // rather than a flat painted shape
-    for (let i=0;i<70;i++){
+    for (let i=0;i<50;i++){
       const wx = px + hash(seedBase+i*3.7)*(W+400)-200;
       const y = baseY - hash(seedBase+i*5.3)*amp*1.05;
       const r = 3+hash(seedBase+i*7.1)*7;
@@ -1002,10 +1070,10 @@
     // vertical scree/crevice lines running down from near the ridgeline -
     // real texture rather than pure horizontal banding
     ctx.strokeStyle='rgba(0,0,0,0.16)'; ctx.lineWidth=1;
-    for (let i=0;i<16;i++){
+    for (let i=0;i<14;i++){
       const sx = ((hash(seedBase+i*13.1)*(W+200))-100);
       const wx = px+sx;
-      const topY = baseY - ridgeHeight(seedBase, wx, freq, amp)*0.85;
+      const topY = baseY - fbmRidge(seedBase, wx, freq, amp, octaves)*0.85;
       const len = amp*(0.25+hash(seedBase+i*4.4)*0.35);
       ctx.beginPath();
       ctx.moveTo(sx, topY);
@@ -1014,11 +1082,15 @@
     }
 
     if (snowAmt>0.04){
-      ctx.fillStyle = `rgba(255,255,255,${0.8*snowAmt})`;
       for (let sx=-10; sx<=W+10; sx+=step){
-        const y = baseY - ridgeHeight(seedBase, px+sx, freq, amp);
-        if (baseY-y > amp*0.7){
-          ctx.beginPath(); ctx.moveTo(sx-7,y+11); ctx.lineTo(sx,y); ctx.lineTo(sx+7,y+11); ctx.closePath(); ctx.fill();
+        const y = baseY - fbmRidge(seedBase, px+sx, freq, amp, octaves);
+        if (baseY-y > amp*0.68){
+          const capH = 9 + (baseY-y-amp*0.68)*0.1;
+          const snowGrad = ctx.createLinearGradient(sx,y-2,sx,y+capH+8);
+          snowGrad.addColorStop(0, `rgba(255,255,255,${0.92*snowAmt})`);
+          snowGrad.addColorStop(1, `rgba(210,224,240,${0.5*snowAmt})`);
+          ctx.fillStyle = snowGrad;
+          ctx.beginPath(); ctx.moveTo(sx-7,y+capH+2); ctx.lineTo(sx,y-2); ctx.lineTo(sx+7,y+capH+2); ctx.closePath(); ctx.fill();
         }
       }
     }
@@ -1028,7 +1100,7 @@
       const ly = baseY - amp*0.16*(li+1);
       ctx.beginPath();
       for (let sx=-10; sx<=W+10; sx+=step*2){
-        const ridgeY = baseY - ridgeHeight(seedBase, px+sx, freq, amp);
+        const ridgeY = baseY - fbmRidge(seedBase, px+sx, freq, amp, octaves);
         const y = Math.max(ridgeY+6, ly + Math.sin((px+sx)*0.01+li)*6);
         if (sx===-10) ctx.moveTo(sx,y); else ctx.lineTo(sx,y);
       }
@@ -1044,7 +1116,18 @@
     const baseY = groundY() - AMP()*0.30;
     const cold = Math.min(1, pal.nightAmt*0.5 + (pal.loop? Math.min(pal.loop*0.18,0.55):0));
     const freqVariance = 0.0075 * (0.85 + 0.3*hash(pal.loop*3.1+pal.i0*7.7));
-    drawMountainLayer(camX, 0.16, 47.3, freqVariance, AMP()*1.05*growth, baseY-AMP()*0.25, pal.mtnNear, 0.58, cold);
+
+    // Three parallax ranges instead of one - far, mid, near - each more
+    // detailed (more fbm octaves) and more saturated than the last, so the
+    // range reads with real depth (atmospheric perspective) instead of a
+    // single flat silhouette.
+    const farColor = mixHex(pal.mtnFar, pal.skyBot, 0.4);
+    drawMountainLayer(camX, 0.05, 11.7, freqVariance*0.5, AMP()*1.6*growth, baseY-AMP()*0.52, farColor, 0.30, Math.min(1,cold+0.3), 2);
+
+    const midColor = mixHex(pal.mtnFar, pal.mtnNear, 0.42);
+    drawMountainLayer(camX, 0.10, 29.1, freqVariance*0.78, AMP()*1.28*growth, baseY-AMP()*0.38, midColor, 0.48, Math.min(1,cold+0.12), 3);
+
+    drawMountainLayer(camX, 0.16, 47.3, freqVariance, AMP()*1.05*growth, baseY-AMP()*0.25, pal.mtnNear, 0.62, cold, 4);
   }
 
   function drawBackground(camX, pal){
@@ -1087,17 +1170,75 @@
     const sunX=W*0.5+Math.cos(sunPhase)*W*0.6-camX*0.015;
     const sunY=H*0.2-Math.sin(sunPhase)*H*0.15;
     const ssx=((sunX%W)+W)%W, ssy=Math.max(26,sunY);
+    // how high the sun/moon sits in its arc right now (0 = horizon, 1 =
+    // zenith) - used to fatten/brighten the glow near "noon"/"midnight" and
+    // let it thin out near the horizon, the way real atmosphere scatters light
+    const arcHeight = Math.max(0, Math.sin(sunPhase));
     if (pal.isNight){
       ctx.save();
-      ctx.fillStyle=pal.sun;
+      // soft halo behind the moon so it glows through the night air instead
+      // of reading as a flat cutout disc
+      const haloR = 46 + arcHeight*10;
+      const halo = ctx.createRadialGradient(ssx,ssy,2, ssx,ssy,haloR);
+      halo.addColorStop(0, 'rgba(228,232,255,0.35)');
+      halo.addColorStop(1, 'rgba(228,232,255,0)');
+      ctx.fillStyle = halo;
+      ctx.beginPath(); ctx.arc(ssx,ssy,haloR,0,Math.PI*2); ctx.fill();
+
+      // lit-sphere gradient body rather than a flat fill
+      const moonGrad = ctx.createRadialGradient(ssx-6,ssy-6,2, ssx,ssy,20);
+      moonGrad.addColorStop(0,'#fbfaf6');
+      moonGrad.addColorStop(0.6, pal.sun);
+      moonGrad.addColorStop(1, mixHex(pal.sun,'#8892b8',0.4));
+      ctx.fillStyle = moonGrad;
       ctx.beginPath(); ctx.arc(ssx,ssy,20,0,Math.PI*2); ctx.fill();
+
+      // waning crescent bite
       ctx.globalCompositeOperation='destination-out';
+      ctx.fillStyle='rgba(0,0,0,0.9)';
       ctx.beginPath(); ctx.arc(ssx+9,ssy-4,17,0,Math.PI*2); ctx.fill();
+      ctx.globalCompositeOperation='source-over';
+
+      // a couple of soft craters for close-up texture on the lit sliver
+      ctx.globalAlpha=0.18; ctx.fillStyle='#9aa0c0';
+      ctx.beginPath(); ctx.arc(ssx-8,ssy+3,3.2,0,Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(ssx-4,ssy-8,2.2,0,Math.PI*2); ctx.fill();
+      ctx.globalAlpha=1;
       ctx.restore();
     } else {
       ctx.save();
-      ctx.shadowColor=pal.sun; ctx.shadowBlur=18;
-      ctx.fillStyle=pal.sun;
+      // wide, soft outer glow - real daylight bloom spilling into the sky,
+      // not just a small shadowBlur fringe
+      const glowR = 70 + arcHeight*30;
+      const glow = ctx.createRadialGradient(ssx,ssy,4, ssx,ssy,glowR);
+      glow.addColorStop(0, mixHex(pal.sun,'#ffffff',0.5));
+      glow.addColorStop(0.35, `rgba(255,244,214,${0.30+0.12*arcHeight})`);
+      glow.addColorStop(1, 'rgba(255,244,214,0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath(); ctx.arc(ssx,ssy,glowR,0,Math.PI*2); ctx.fill();
+
+      // a few slow-rotating, soft rays - cheap but reads as sunlight rather
+      // than a plain glowing dot
+      ctx.save();
+      ctx.translate(ssx,ssy); ctx.rotate(elapsed*0.05);
+      ctx.globalAlpha = 0.16 + arcHeight*0.08;
+      ctx.strokeStyle = mixHex(pal.sun,'#ffffff',0.3);
+      ctx.lineWidth = 2;
+      for (let i=0;i<8;i++){
+        const a = i/8*Math.PI*2;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a)*26, Math.sin(a)*26);
+        ctx.lineTo(Math.cos(a)*(40+arcHeight*14), Math.sin(a)*(40+arcHeight*14));
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // hot bright core cooling toward its rim, instead of one flat color
+      const sunGrad = ctx.createRadialGradient(ssx,ssy,0, ssx,ssy,22);
+      sunGrad.addColorStop(0,'#fffdf2');
+      sunGrad.addColorStop(0.55, pal.sun);
+      sunGrad.addColorStop(1, mixHex(pal.sun,'#ff8a3c',0.35));
+      ctx.fillStyle = sunGrad;
       ctx.beginPath(); ctx.arc(ssx,ssy,22,0,Math.PI*2); ctx.fill();
       ctx.restore();
     }
@@ -1551,6 +1692,11 @@
     if (darkAmt>0.01){ ctx.fillStyle=`rgba(4,4,7,${darkAmt})`; ctx.fillRect(0,0,W,H); }
     const brightAmt = Math.max(0, 0.1-pal.nightAmt)*1.4;
     if (brightAmt>0.01){ ctx.fillStyle=`rgba(255,248,224,${brightAmt})`; ctx.fillRect(0,0,W,H); }
+    // a gentle amber wash centered on the dusk/dawn band (nightAmt ~0.35) so
+    // the whole game visibly reads as "getting dark" or "waking up" through
+    // that middle stretch, instead of jumping straight from bright to dark
+    const duskAmt = Math.max(0, 0.4 - Math.abs(pal.nightAmt-0.35))*0.5;
+    if (duskAmt>0.01){ ctx.fillStyle=`rgba(255,150,90,${duskAmt*0.22})`; ctx.fillRect(0,0,W,H); }
 
     if (flashTimer>0){ ctx.fillStyle=`rgba(255,217,61,${flashTimer/0.10*0.3})`; ctx.fillRect(0,0,W,H); }
     if (shakeTimer>0) ctx.restore();
