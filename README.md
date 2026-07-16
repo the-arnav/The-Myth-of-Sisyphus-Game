@@ -5,7 +5,7 @@
 
 A single-file, browser-based endless climber inspired by Camus's *The Myth of Sisyphus*. There is no finish line: every hill you crest simply rolls into the next one. The only real objective is distance — how far you can carry the boulder before your rhythm breaks and it slips away from you.
 
-**[[▶ Play the game](https://thesisyphus.netlify.app/)](#) <!-- replace this link with your deployed game URL --**
+**[[▶ Play the game](https://thesisyphus.netlify.app/)](#)**
 
 ---
 
