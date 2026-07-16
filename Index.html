@@ -220,7 +220,7 @@
   // harder one. Every difficulty-related constant below is derived from
   // this single number, so you only ever need to change this one line
   // and re-test, instead of hunting through five separate constants.
-  const DIFFICULTY = 0.8;
+  const DIFFICULTY = 1.0;
 
   const BASE_G = 1650 * DIFFICULTY;              // how hard the slope pulls the boulder back - higher = harder
   const DRAG   = 0.80 * DIFFICULTY;              // how fast speed bleeds off between taps - higher = harder
@@ -346,10 +346,10 @@
 
   // ---- EDIT HERE: your 5 song file paths go in this array ----
   const MUSIC_TRACKS = [
-    'discipline.mp3',
-    'Work Hard Play Hard (Slowed Hardstyle).mp3',
     'Versatile Hardstyle (Slowed)_spotdown.org.mp3',
     'worry - Instrumental Slowed.mp3',
+    'discipline.mp3',
+    'Work Hard Play Hard (Slowed Hardstyle).mp3',
     'smezir_2 - Slowed_spotdown.org.mp3',
   ];
   const BG_MUSIC_VOLUME = 0.35;   // 0 = silent, 1 = full volume. Kept low so it sits behind UI, not over it.
@@ -397,8 +397,12 @@
 
   function loadTrack(player, index){
     player.src = MUSIC_TRACKS[index];
-    player.load();
-    player.currentTime = 0;
+    player.load(); // this alone already resets playback position to 0 - explicitly
+                    // setting .currentTime right after is redundant, AND on some
+                    // browsers (notably iOS Safari) throws InvalidStateError if the
+                    // element has no metadata yet, which used to silently abort
+                    // whatever function called loadTrack() before it finished -
+                    // see the crossTo() comment below for what that broke.
     player.volume = 0;
   }
 
@@ -439,29 +443,58 @@
   // same track instead of advancing further. Making the index authoritative
   // the instant a skip is requested means each rapid click genuinely targets
   // the next track after the last one requested, not the one before it.
+  //
+  // THE AUTO-ADVANCE-STOPS BUG: this used to call loadTrack() then immediately
+  // start the fade, with no error handling around either. loadTrack() used to
+  // also set .currentTime=0, which - as noted above - can throw before the
+  // browser has metadata for the new track. Since that throw happened BEFORE
+  // the fade's step() function was ever created, 'crossfading' was left set to
+  // true forever with nothing left running to ever set it back to false. Both
+  // handleTimeUpdate() and handleEnded() refuse to do anything while
+  // crossfading is true (by design, to avoid overlapping fades) - so once it
+  // got stuck, EVERY future track-end, forever, was silently ignored: exactly
+  // "plays one track, then never advances." The try/catch below guarantees
+  // crossfading always gets reset no matter what fails, so a bad track can
+  // never permanently jam the playlist again.
   function crossTo(targetIndex, seconds){
     if (crossfading){
       // don't let fades pile up: stop whatever was fading in and continue
       // fading out from the outgoing track's CURRENT volume, not from full
       // volume, so a rapid second click doesn't cause an audible jump.
       cancelAnimationFrame(fadeRAF);
-      idlePlayer.pause(); idlePlayer.currentTime = 0; idlePlayer.volume = 0;
+      try { idlePlayer.pause(); idlePlayer.currentTime = 0; } catch(e){}
+      idlePlayer.volume = 0;
     }
     crossfading = true;
     currentTrackIndex = targetIndex;
-    loadTrack(idlePlayer, targetIndex);
-    idlePlayer.play().catch(()=>{});
     const fromPlayer = activePlayer, toPlayer = idlePlayer;
+    try {
+      loadTrack(toPlayer, targetIndex);
+      toPlayer.play().catch(()=>{});
+    } catch(e){
+      // couldn't even get the next track loading - hard-cut on the player
+      // that was already working instead of going silent for the rest of the run
+      crossfading = false;
+      try { loadTrack(fromPlayer, targetIndex); fromPlayer.volume = BG_MUSIC_VOLUME; fromPlayer.play().catch(()=>{}); } catch(e2){}
+      return;
+    }
     const fromStartVol = fromPlayer.volume || BG_MUSIC_VOLUME;
     const startTime = performance.now();
     (function step(now){
-      const t = Math.min(1, (now - startTime) / (seconds * 1000));
-      fromPlayer.volume = fromStartVol * (1 - t);
-      toPlayer.volume = BG_MUSIC_VOLUME * t;
-      if (t < 1){ fadeRAF = requestAnimationFrame(step); return; }
-      fromPlayer.pause(); fromPlayer.currentTime = 0;
-      activePlayer = toPlayer; idlePlayer = fromPlayer;
-      crossfading = false;
+      try {
+        const t = Math.min(1, (now - startTime) / (seconds * 1000));
+        fromPlayer.volume = fromStartVol * (1 - t);
+        toPlayer.volume = BG_MUSIC_VOLUME * t;
+        if (t < 1){ fadeRAF = requestAnimationFrame(step); return; }
+        fromPlayer.pause(); fromPlayer.currentTime = 0;
+        activePlayer = toPlayer; idlePlayer = fromPlayer;
+        crossfading = false;
+      } catch(e){
+        // whatever broke mid-fade, still complete the swap and release the
+        // crossfading flag so the playlist can never get permanently stuck
+        activePlayer = toPlayer; idlePlayer = fromPlayer;
+        crossfading = false;
+      }
     })(startTime);
   }
   function beginCrossfade(){
@@ -700,25 +733,25 @@
   // no waterfalls, lakes-only, or non-mountain scenery slipped in). Ten distinct summits
   // and ranges rotate through as the climb progresses.
   const BIOMES = [
-    { name:'alpine-sunset', sky:['#4a86bb','#bfe6ef'], sun:'#fff3c4', mtnFar:'#8497b2', mtnNear:'#59728c', fall:'#f5fbff', grass:['#4b8a34','#2f5c26'], tree:['#1e3d22','#2f5c34'], night:0,
+    { name:'alpine-sunset', sky:['#4a86bb','#bfe6ef'], sun:'#fff3c4', mtnFar:'#8a8378', mtnNear:'#5f584c', fall:'#f5fbff', grass:['#4b8a34','#2f5c26'], tree:['#1e3d22','#2f5c34'], night:0,
       photo:'https://images.unsplash.com/photo-1612441804231-77a36b284856?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
-    { name:'italian-alps', sky:['#4a7fae','#cfe8f0'], sun:'#fff6d8', mtnFar:'#7e93ac', mtnNear:'#4f6884', fall:'#eef7fb', grass:['#4d8a3a','#2e5a28'], tree:['#1c3a20','#2c5230'], night:0,
+    { name:'italian-alps', sky:['#4a7fae','#cfe8f0'], sun:'#fff6d8', mtnFar:'#847c70', mtnNear:'#544c40', fall:'#eef7fb', grass:['#4d8a3a','#2e5a28'], tree:['#1c3a20','#2c5230'], night:0,
       photo:'https://images.unsplash.com/photo-1602941149908-aed8997fc223?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
-    { name:'ember-summit', sky:['#3a1f2e','#c96a4a'], sun:'#ff9a52', mtnFar:'#5c3a3a', mtnNear:'#2e1c22', fall:'#ffd9a8', grass:['#4a3a24','#2c2216'], tree:['#231810','#341f18'], night:0.15,
+    { name:'ember-summit', sky:['#3a1f2e','#c96a4a'], sun:'#ff9a52', mtnFar:'#5c463c', mtnNear:'#332821', fall:'#ffd9a8', grass:['#4a3a24','#2c2216'], tree:['#231810','#341f18'], night:0.15,
       photo:'https://images.unsplash.com/photo-1778017825902-5d212f5ce532?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
-    { name:'violet-horizon', sky:['#2c2a52','#8b6fa0'], sun:'#f0a0c0', mtnFar:'#4a3f66', mtnNear:'#241f3a', fall:'#e8d6f0', grass:['#39304a','#221c30'], tree:['#181428','#251f38'], night:0.3,
+    { name:'violet-horizon', sky:['#2c2a52','#8b6fa0'], sun:'#f0a0c0', mtnFar:'#4c463f', mtnNear:'#282420', fall:'#e8d6f0', grass:['#39304a','#221c30'], tree:['#181428','#251f38'], night:0.3,
       photo:'https://images.unsplash.com/photo-1755845711249-32cfcdcabfeb?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
-    { name:'frostpine-dawn', sky:['#2e3a52','#e8a878'], sun:'#ffcf9c', mtnFar:'#5a6478', mtnNear:'#2c3648', fall:'#fbe8d4', grass:['#2c4a34','#1a301f'], tree:['#132018','#1e2f22'], night:0.1,
+    { name:'frostpine-dawn', sky:['#2e3a52','#e8a878'], sun:'#ffcf9c', mtnFar:'#726c62', mtnNear:'#413c34', fall:'#fbe8d4', grass:['#2c4a34','#1a301f'], tree:['#132018','#1e2f22'], night:0.1,
       photo:'https://images.unsplash.com/photo-1761585580432-77b4d4f5b299?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
-    { name:'pastel-mist', sky:['#3a3358','#e0a4a0'], sun:'#ffc9b0', mtnFar:'#5c5470', mtnNear:'#332c48', fall:'#f6dde0', grass:['#3e4a3a','#242e22'], tree:['#1a221c','#28322a'], night:0.2,
+    { name:'pastel-mist', sky:['#3a3358','#e0a4a0'], sun:'#ffc9b0', mtnFar:'#786e64', mtnNear:'#463e36', fall:'#f6dde0', grass:['#3e4a3a','#242e22'], tree:['#1a221c','#28322a'], night:0.2,
       photo:'https://images.unsplash.com/photo-1772733694354-3b4a33568ef4?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
-    { name:'amber-fog', sky:['#3a2418','#d88a4a'], sun:'#ffb066', mtnFar:'#5c4030', mtnNear:'#2e2018', fall:'#ffdcae', grass:['#4a3a1e','#2c2412'], tree:['#221810','#332418'], night:0.18,
+    { name:'amber-fog', sky:['#3a2418','#d88a4a'], sun:'#ffb066', mtnFar:'#5c4838', mtnNear:'#33261a', fall:'#ffdcae', grass:['#4a3a1e','#2c2412'], tree:['#221810','#332418'], night:0.18,
       photo:'https://images.unsplash.com/photo-1761995912979-c3646524391b?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
-    { name:'alpstein-glow', sky:['#241c3a','#e08a3c'], sun:'#ffb35c', mtnFar:'#40304a', mtnNear:'#1e1826', fall:'#ffdca8', grass:['#403420','#241a10'], tree:['#1c140c','#2a2016'], night:0.35,
+    { name:'alpstein-glow', sky:['#241c3a','#e08a3c'], sun:'#ffb35c', mtnFar:'#4a3d30', mtnNear:'#241c14', fall:'#ffdca8', grass:['#403420','#241a10'], tree:['#1c140c','#2a2016'], night:0.35,
       photo:'https://images.unsplash.com/photo-1780042426982-cb794203ea1d?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
-    { name:'matterhorn-night', sky:['#0a0e24','#242c50'], sun:'#e4e8ff', mtnFar:'#242238', mtnNear:'#12111e', fall:'#c8d4ee', grass:['#1a2620','#101a14'], tree:['#0c1610','#141f18'], night:1,
+    { name:'matterhorn-night', sky:['#0a0e24','#242c50'], sun:'#e4e8ff', mtnFar:'#302e2c', mtnNear:'#151412', fall:'#c8d4ee', grass:['#1a2620','#101a14'], tree:['#0c1610','#141f18'], night:1,
       photo:'https://images.unsplash.com/photo-1760985813018-b6b951c57fe8?fm=jpg&q=80&w=1600&auto=format&fit=crop' },
-    { name:'turquoise-braies', sky:['#2a3a56','#7ab0c4'], sun:'#e8f4ee', mtnFar:'#3e5468', mtnNear:'#1e2c3a', fall:'#d6f0ea', grass:['#2e5638','#1a3420'], tree:['#122018','#1c2f22'], night:0.12,
+    { name:'turquoise-braies', sky:['#2a3a56','#7ab0c4'], sun:'#e8f4ee', mtnFar:'#726e62', mtnNear:'#403c32', fall:'#d6f0ea', grass:['#2e5638','#1a3420'], tree:['#122018','#1c2f22'], night:0.12,
       photo:'https://images.unsplash.com/photo-1741866987680-5e3d7f052b87?fm=jpg&q=80&w=1600&auto=format&fit=crop' }
   ];
   // Preload each biome's photo once. No crossOrigin attribute is set here - the game
@@ -781,12 +814,18 @@
     // each full lap gets a subtle extra chill/darkening so the climb still feels like it's
     // going somewhere higher and harsher, without needing brand-new art per lap
     const chill = Math.min(loop*0.08, 0.4);
-    pal.mtnFar = mixHex(pal.mtnFar, '#1a2030', chill);
-    pal.mtnNear = mixHex(pal.mtnNear, '#0e1220', chill);
+    pal.mtnFar = mixHex(pal.mtnFar, '#231f1a', chill);
+    pal.mtnNear = mixHex(pal.mtnNear, '#121110', chill);
     pal.nightAmt = Math.min(1, pal.nightAmt + chill*0.3);
     pal.isNight = pal.nightAmt > 0.5;
     pal.loop = loop;
     pal.i0 = i0; pal.i1 = i1; pal.t = t;
+    // Cosmetic-only: the background mountain silhouette grows taller and more
+    // varied the further you've climbed, purely for visual grandeur. This is
+    // completely separate from hillAmp()/heightAt() (the actual walkable
+    // terrain the boulder physics uses), so the climb itself never gets
+    // physically harder because of it - only the backdrop looks bigger.
+    pal.mtnGrowth = 1 + Math.min(progressM/2600, 0.85);
     return pal;
   }
 
@@ -914,6 +953,36 @@
     grad.addColorStop(1, color);
     ctx.fillStyle = grad; ctx.fill();
 
+    // clip everything past this point to the mountain silhouette itself, so
+    // grain/crevice texture never spills onto the sky
+    ctx.save();
+    ctx.clip();
+
+    // speckle-grain rock texture - the same "mottled stone" trick used on the
+    // boulder, scattered across the whole range so it reads as weathered rock
+    // rather than a flat painted shape
+    for (let i=0;i<70;i++){
+      const wx = px + hash(seedBase+i*3.7)*(W+400)-200;
+      const y = baseY - hash(seedBase+i*5.3)*amp*1.05;
+      const r = 3+hash(seedBase+i*7.1)*7;
+      ctx.fillStyle = hash(seedBase+i*9.9)>0.5 ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.07)';
+      ctx.beginPath(); ctx.arc(wx-px, y, r, 0, Math.PI*2); ctx.fill();
+    }
+
+    // vertical scree/crevice lines running down from near the ridgeline -
+    // real texture rather than pure horizontal banding
+    ctx.strokeStyle='rgba(0,0,0,0.16)'; ctx.lineWidth=1;
+    for (let i=0;i<16;i++){
+      const sx = ((hash(seedBase+i*13.1)*(W+200))-100);
+      const wx = px+sx;
+      const topY = baseY - ridgeHeight(seedBase, wx, freq, amp)*0.85;
+      const len = amp*(0.25+hash(seedBase+i*4.4)*0.35);
+      ctx.beginPath();
+      ctx.moveTo(sx, topY);
+      ctx.lineTo(sx + (hash(seedBase+i*6.6)-0.5)*14, topY+len);
+      ctx.stroke();
+    }
+
     if (snowAmt>0.04){
       ctx.fillStyle = `rgba(255,255,255,${0.8*snowAmt})`;
       for (let sx=-10; sx<=W+10; sx+=step){
@@ -935,21 +1004,32 @@
       }
       ctx.stroke();
     }
+    ctx.restore(); // end clip
     ctx.restore();
   }
   function drawMountains(camX, pal){
+    // grow the range (and vary the frequency a touch) as progress climbs,
+    // purely cosmetic - see pal.mtnGrowth's comment in getPalette()
+    const growth = pal.mtnGrowth || 1;
     const baseY = groundY() - AMP()*0.30;
     const cold = Math.min(1, pal.nightAmt*0.5 + (pal.loop? Math.min(pal.loop*0.18,0.55):0));
-    drawMountainLayer(camX, 0.16, 47.3, 0.0075, AMP()*1.05, baseY-AMP()*0.25, pal.mtnNear, 0.58, cold);
+    const freqVariance = 0.0075 * (0.85 + 0.3*hash(pal.loop*3.1+pal.i0*7.7));
+    drawMountainLayer(camX, 0.16, 47.3, freqVariance, AMP()*1.05*growth, baseY-AMP()*0.25, pal.mtnNear, 0.58, cold);
   }
 
   function drawBackground(camX, pal){
     const A = BIOMES[pal.i0], B = BIOMES[pal.i1];
+    // Mood wash stays small and fixed now - it's just a light color-grade
+    // toward the biome's tone, not the mechanism for day/night darkness
+    // (that's handled separately, as a neutral exposure pass in render()
+    // so it darkens/brightens without dumping a colored, often-blue tint
+    // over the whole scene).
+    const washAmt = 0.16;
     if (A.loaded){
-      drawPhoto(A.img, camX, pal.skyBot, 0.24 + pal.nightAmt*0.4);
+      drawPhoto(A.img, camX, pal.skyBot, washAmt);
       if (B.loaded && pal.t>0.02){
         ctx.save(); ctx.globalAlpha = pal.t;
-        drawPhoto(B.img, camX, pal.skyBot, 0.24 + pal.nightAmt*0.4);
+        drawPhoto(B.img, camX, pal.skyBot, washAmt);
         ctx.restore();
       }
     } else {
@@ -1053,26 +1133,47 @@
     }
   }
 
-  // Foreground silhouette layer: rounded rocks and grass blades hugging the
-  // very bottom edge, scrolling faster than the terrain (parallax > 1) so
-  // it reads as the closest thing to the camera - a real depth cue rather
-  // than everything sitting at the same apparent distance.
+  // Foreground silhouette layer: textured rocks, grass blades, and wildflowers
+  // hugging the very bottom edge, scrolling faster than the terrain
+  // (parallax > 1) so it reads as the closest thing to the camera - a real
+  // depth cue rather than everything sitting at the same apparent distance.
   function drawForeground(camX, pal){
     const fx = camX*1.4;
+    const nightMix = pal.nightAmt;
+    const rockBase = mixHex('#544838','#0a0806', 0.3+nightMix*0.45); // warm weathered stone, darker at night
+    const rockHi   = mixHex('#9c8c70','#211d16', nightMix*0.6);      // sunlit edge
+    const grassCol = mixHex('#213a18','#070a05', nightMix*0.55);
+
     ctx.save();
-    ctx.fillStyle = mixHex('#0a0704','#000000',0.15);
+
+    // rocks: a base shape, a lit highlight arc, and a couple of small pebbles
+    // scattered nearby - reads as real weathered stone, not a flat dark blob
     for (let i=Math.floor(fx/220)-1; i<Math.floor((fx+W)/220)+1; i++){
       if (hash(i*3.3) > 0.6) continue;
       const wx = i*220 + hash(i*5.5)*140;
       const sx = wx - fx;
       if (sx<-90||sx>W+90) continue;
       const rr = 24+hash(i*7.7)*32;
+      ctx.fillStyle = rockBase;
       ctx.beginPath();
       ctx.ellipse(sx, H+rr*0.3, rr, rr*0.85, 0, Math.PI, 0);
       ctx.fill();
+      ctx.globalAlpha = 0.5;
+      ctx.fillStyle = rockHi;
+      ctx.beginPath();
+      ctx.ellipse(sx-rr*0.3, H+rr*0.02, rr*0.4, rr*0.2, 0.3, Math.PI*0.9, Math.PI*1.9);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      [0.6,-0.85].forEach((f,pi)=>{
+        const pr = rr*0.17*(1-pi*0.25);
+        const px = sx + rr*f;
+        ctx.fillStyle = rockBase;
+        ctx.beginPath(); ctx.ellipse(px, H+pr*0.28, pr, pr*0.78, 0, Math.PI, 0); ctx.fill();
+      });
     }
-    ctx.strokeStyle = mixHex('#0a0704','#000000',0.1);
-    ctx.lineWidth = 3; ctx.lineCap='round';
+
+    // grass blades
+    ctx.strokeStyle = grassCol; ctx.lineWidth = 3; ctx.lineCap='round';
     for (let i=Math.floor(fx/24)-2; i<Math.floor((fx+W)/24)+2; i++){
       const wx = i*24 + hash(i*9.1)*13;
       const sx = wx - fx;
@@ -1084,6 +1185,34 @@
       ctx.quadraticCurveTo(sx+lean*0.6, H-bladeH*0.55, sx+lean, H-bladeH);
       ctx.stroke();
     }
+
+    // wildflowers scattered among the grass - five soft petals plus a bright
+    // center, the one real spot of unashamed color in an otherwise dark
+    // foreground silhouette, gently muted at night rather than disappearing
+    const petalColors = ['#e8a0c0','#f2e0a0','#c9a8e8','#f0f0ee','#f0b090'];
+    for (let i=Math.floor(fx/62)-2; i<Math.floor((fx+W)/62)+2; i++){
+      if (hash(i*4.4+2) > 0.5) continue;
+      const wx = i*62 + hash(i*6.6)*42;
+      const sx = wx - fx;
+      if (sx<-20||sx>W+20) continue;
+      const stemH = 18+hash(i*3.3)*16;
+      const topY = H - stemH;
+      ctx.strokeStyle = grassCol; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(sx,H+2); ctx.lineTo(sx,topY); ctx.stroke();
+      const col = petalColors[Math.floor(hash(i*8.8)*petalColors.length)%petalColors.length];
+      ctx.globalAlpha = 0.4 + 0.55*(1-nightMix);
+      ctx.fillStyle = col;
+      for (let p=0;p<5;p++){
+        const a = p/5*Math.PI*2 + hash(i*2.2);
+        ctx.beginPath();
+        ctx.ellipse(sx+Math.cos(a)*3.2, topY+Math.sin(a)*3.2, 2.4, 1.6, a, 0, Math.PI*2);
+        ctx.fill();
+      }
+      ctx.fillStyle = '#ffe37a';
+      ctx.beginPath(); ctx.arc(sx,topY,1.5,0,Math.PI*2); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
     ctx.restore();
   }
 
@@ -1381,6 +1510,17 @@
     });
 
     drawForeground(camX, pal);
+
+    // Day/night exposure - applied last, over the whole composited scene, so
+    // terrain/trees/foreground all darken or brighten together instead of
+    // just the sky. Night uses a neutral near-black (not a colored tint, so
+    // it doesn't read as "blue") and only the brightest, most daylit biomes
+    // (nightAmt near 0) get a touch of warm brightening - duskier/dawn biomes
+    // with a small-but-nonzero nightAmt sit in between and are left alone.
+    const darkAmt = Math.max(0, pal.nightAmt-0.1)*0.62;
+    if (darkAmt>0.01){ ctx.fillStyle=`rgba(4,4,7,${darkAmt})`; ctx.fillRect(0,0,W,H); }
+    const brightAmt = Math.max(0, 0.1-pal.nightAmt)*1.4;
+    if (brightAmt>0.01){ ctx.fillStyle=`rgba(255,248,224,${brightAmt})`; ctx.fillRect(0,0,W,H); }
 
     if (flashTimer>0){ ctx.fillStyle=`rgba(255,217,61,${flashTimer/0.10*0.3})`; ctx.fillRect(0,0,W,H); }
     if (shakeTimer>0) ctx.restore();
