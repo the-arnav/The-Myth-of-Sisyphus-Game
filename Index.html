@@ -356,32 +356,32 @@
   let musicMuted = false;
   const muteBtn = document.getElementById('muteBtn');
 
-  // THE ACTUAL BUG: only playerA was ever play()'d from a real tap (inside
-  // startGame()). playerB's very first .play() call happened later, from
-  // inside the timeupdate/crossfade code - which is NOT a user gesture.
-  // Mobile Safari (and some Chrome/Android configs) require EVERY <audio>
-  // element to individually receive a play() call during an actual user
-  // gesture at least once - unlike desktop Chrome, unlocking one element
-  // does not unlock the other. So playerB's play() during the crossfade was
-  // silently rejected (the .catch(()=>{}) swallowed it), the fade-out timer
-  // still ran to completion on schedule, and the code then paused playerA
-  // anyway, believing the handoff had succeeded. Net effect: track 1 plays,
-  // then everything just goes silent - exactly what was reported. Fix: play()
-  // + immediately pause() BOTH players, synchronously inside the very first
-  // real tap, before anything else happens.
+  // THE ACTUAL SILENT-START BUG: unlockAudioPlayers() used to play()+pause()
+  // BOTH players immediately on the first tap - including playerA, which is
+  // the exact same element startPlaylist() was about to load and play "for
+  // real" a moment later, in that same synchronous call. That collided:
+  // startPlaylist()'s .load() call aborted the unlock's still-pending
+  // play() promise on playerA; that promise's rejection handler then fired
+  // a tick later and called playerA.pause() - stomping the real playback
+  // that had just started. So the song technically started, then was
+  // immediately silenced by its own leftover unlock cleanup. It only
+  // "started" later because restarting after a game-over calls playMusic()
+  // again with no matching .load() nearby to race against.
+  // Fix: playerA needs NO separate unlock step at all - startPlaylist()'s
+  // own play() call already happens synchronously inside the user's tap, so
+  // it satisfies the gesture requirement by itself. Only playerB genuinely
+  // needs a throwaway unlock, since its real first use (the first crossfade)
+  // happens later, outside any gesture.
   let audioUnlocked = false;
   function unlockAudioPlayers(){
     if (audioUnlocked) return;
     audioUnlocked = true;
-    loadTrack(playerA, 0);
     loadTrack(playerB, MUSIC_TRACKS.length>1 ? 1 : 0);
-    [playerA, playerB].forEach(p=>{
-      p.muted = true;
-      let pr;
-      try { pr = p.play(); } catch(e){ p.muted = false; return; }
-      const finish = ()=>{ p.pause(); p.currentTime = 0; p.muted = false; };
-      if (pr && pr.then) pr.then(finish).catch(finish); else finish();
-    });
+    playerB.muted = true;
+    let pr;
+    try { pr = playerB.play(); } catch(e){ playerB.muted = false; return; }
+    const finish = ()=>{ playerB.pause(); playerB.currentTime = 0; playerB.muted = false; };
+    if (pr && pr.then) pr.then(finish).catch(finish); else finish();
   }
 
   function loadTrack(player, index){
@@ -418,26 +418,43 @@
     activePlayer.pause();
   }
 
-  // Fades the current song out and the next one in over CROSSFADE_SECONDS,
-  // then swaps which player is "active" so the cycle can repeat.
-  function beginCrossfade(){
-    if (crossfading) return;
+  // Fades the current track out and targetIndex in over `seconds`, then swaps
+  // which player is "active" so the cycle can repeat. currentTrackIndex is
+  // updated IMMEDIATELY (not when the fade finishes) - that's the fix for
+  // the repeated-click bug: the old code only advanced currentTrackIndex once
+  // the 3-second animation completed, so clicking "next" several times before
+  // that finished always recomputed the same "current + 1" target from the
+  // same stale index, and every click just restarted an identical fade to the
+  // same track instead of advancing further. Making the index authoritative
+  // the instant a skip is requested means each rapid click genuinely targets
+  // the next track after the last one requested, not the one before it.
+  function crossTo(targetIndex, seconds){
+    if (crossfading){
+      // don't let fades pile up: stop whatever was fading in and continue
+      // fading out from the outgoing track's CURRENT volume, not from full
+      // volume, so a rapid second click doesn't cause an audible jump.
+      cancelAnimationFrame(fadeRAF);
+      idlePlayer.pause(); idlePlayer.currentTime = 0; idlePlayer.volume = 0;
+    }
     crossfading = true;
-    const nextIndex = (currentTrackIndex + 1) % MUSIC_TRACKS.length;
-    loadTrack(idlePlayer, nextIndex);
+    currentTrackIndex = targetIndex;
+    loadTrack(idlePlayer, targetIndex);
     idlePlayer.play().catch(()=>{});
     const fromPlayer = activePlayer, toPlayer = idlePlayer;
+    const fromStartVol = fromPlayer.volume || BG_MUSIC_VOLUME;
     const startTime = performance.now();
     (function step(now){
-      const t = Math.min(1, (now - startTime) / (CROSSFADE_SECONDS * 1000));
-      fromPlayer.volume = BG_MUSIC_VOLUME * (1 - t);
+      const t = Math.min(1, (now - startTime) / (seconds * 1000));
+      fromPlayer.volume = fromStartVol * (1 - t);
       toPlayer.volume = BG_MUSIC_VOLUME * t;
       if (t < 1){ fadeRAF = requestAnimationFrame(step); return; }
-      fromPlayer.pause();
+      fromPlayer.pause(); fromPlayer.currentTime = 0;
       activePlayer = toPlayer; idlePlayer = fromPlayer;
-      currentTrackIndex = nextIndex;
       crossfading = false;
     })(startTime);
+  }
+  function beginCrossfade(){
+    crossTo((currentTrackIndex + 1) % MUSIC_TRACKS.length, CROSSFADE_SECONDS);
   }
 
   // Starts the crossfade a few seconds before the current song ends.
@@ -481,19 +498,14 @@
     p.addEventListener('playing', ()=>{ skipAttempts = 0; });
   });
 
-  // manual "skip to next song" - used by the new next-track button. Reuses
-  // the same crossfade path as the automatic end-of-song handoff so it fades
-  // rather than hard-cutting, but falls back to a hard swap if a crossfade
-  // is already mid-flight or music hasn't started yet.
+  // manual "skip to next song" - used by the next-track button. A short,
+  // snappy fade (not the long end-of-song one) so rapid repeated clicks each
+  // land cleanly on the following track instead of stacking up.
+  const MANUAL_SKIP_SECONDS = 0.5;
   function skipToNext(){
     unlockAudioPlayers();
     if (currentTrackIndex === -1){ startPlaylist(); return; }
-    if (crossfading){
-      cancelAnimationFrame(fadeRAF);
-      idlePlayer.pause(); idlePlayer.volume = 0;
-      crossfading = false;
-    }
-    beginCrossfade();
+    crossTo((currentTrackIndex + 1) % MUSIC_TRACKS.length, MANUAL_SKIP_SECONDS);
   }
 
   document.getElementById('nextTrackBtn').addEventListener('pointerdown', e=>{
@@ -773,8 +785,22 @@
     ctx.globalAlpha = alpha;
     ctx.translate(sx, gy);
     ctx.scale(scale, scale);
-    const sh = mixHex(tint,'#000000',0.42); // shadow side
-    const hi = mixHex(tint,'#ffffff',0.16); // sunlit edge
+
+    // soft contact shadow - grounds the tree in the grass instead of it
+    // looking like a cutout pasted on top of the slope
+    ctx.save();
+    ctx.globalAlpha = alpha*0.55;
+    ctx.fillStyle = 'rgba(8,6,4,0.32)';
+    ctx.beginPath(); ctx.ellipse(0.4,5,7.5,2.3,0,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+
+    // every tree gets a slight color nudge (warmer/cooler, lighter/darker) so
+    // a whole hillside of pines reads as a living forest, not one color
+    // repeated identically hundreds of times
+    const jitter = hash(seed*13.7)-0.5;
+    const treeTint = jitter>0 ? mixHex(tint,'#fff2c0',jitter*0.3) : mixHex(tint,'#0a1a10',-jitter*0.34);
+    const sh = mixHex(treeTint,'#000000',0.42); // shadow side
+    const hi = mixHex(treeTint,'#ffffff',0.16); // sunlit edge
 
     // trunk: tapered, two-tone bark with a few knot/grain marks
     ctx.fillStyle = '#3a2418';
@@ -791,7 +817,7 @@
       // so the forest isn't 100% conifer silhouettes
       const lobes = [[-6,-16,10],[5,-15,9],[0,-24,12],[-3,-9,8]];
       lobes.forEach(([lx,ly,r],i)=>{
-        ctx.fillStyle = i%2? sh : tint;
+        ctx.fillStyle = i%2? sh : treeTint;
         ctx.beginPath(); ctx.arc(lx,ly,r,0,Math.PI*2); ctx.fill();
       });
       ctx.fillStyle = hi;
@@ -802,8 +828,10 @@
 
     // pine layers, jagged (not smooth triangles) so the canopy reads as needles,
     // each layer shaded darker on the left / lighter on the right for volume,
-    // plus a thin snow cap on the topmost layer in colder biomes.
-    const layers = [ [0,-13,27,26], [0,-29,22,25], [0,-43,17,21] ];
+    // plus a thin snow cap on the topmost layer in colder biomes. A fourth,
+    // wider base layer was added so bigger trees keep a full, lush silhouette
+    // instead of just stretching the same three tiers thinner.
+    const layers = [ [0,-9,32,22], [0,-22,27,25], [0,-37,22,25], [0,-51,17,21] ];
     layers.forEach(([lx,ly,lw,lh],li)=>{
       const teeth = 5;
       ctx.fillStyle = sh;
@@ -817,7 +845,7 @@
       ctx.lineTo(lx-lw/2, ly);
       ctx.lineTo(lx+lw/2, ly);
       ctx.closePath(); ctx.fill();
-      ctx.fillStyle = tint;
+      ctx.fillStyle = treeTint;
       ctx.beginPath();
       ctx.moveTo(lx, ly-lh);
       for (let t=0; t<=teeth; t++){
@@ -827,8 +855,8 @@
       }
       ctx.lineTo(lx+lw/2, ly);
       ctx.closePath(); ctx.fill();
-      if (li===0){
-        ctx.fillStyle = hi; ctx.globalAlpha = alpha*0.5;
+      if (li===layers.length-1){
+        ctx.fillStyle = hi; ctx.globalAlpha = alpha*0.55;
         ctx.beginPath(); ctx.moveTo(lx,ly-lh); ctx.lineTo(lx+4,ly-lh*0.55); ctx.lineTo(lx,ly-lh*0.5); ctx.closePath(); ctx.fill();
         ctx.globalAlpha = alpha;
       }
@@ -985,12 +1013,12 @@
     // hovering at one flat height, and sized across a much wider range so
     // the treeline reads as a mixed forest, not a row of identical cutouts.
     const treeCamX = camX*0.55;
-    for (let i=Math.floor(treeCamX/58)-2; i<Math.floor((treeCamX+W)/58)+2; i++){
-      const jitter = hash(i)*32-16;
-      const sx = i*58 - treeCamX + jitter;
-      if (sx<-70||sx>W+70) continue;
+    for (let i=Math.floor(treeCamX/74)-2; i<Math.floor((treeCamX+W)/74)+2; i++){
+      const jitter = hash(i)*38-19;
+      const sx = i*74 - treeCamX + jitter;
+      if (sx<-90||sx>W+90) continue;
       const sizeRoll = hash(i*3.1);
-      const scale = 0.55 + sizeRoll*sizeRoll*1.7; // bigger overall, occasional giants
+      const scale = 0.85 + sizeRoll*sizeRoll*2.3; // noticeably bigger, occasional giants
       const depth = hash(i*7.7);
       const tint = depth>0.5? pal.treeNear: pal.treeFar;
       const wx = camX + sx; // approximate world position, used only to match slope contour
@@ -1003,14 +1031,14 @@
     // a handful of large foreground trees locked exactly to the true terrain
     // contour (no parallax offset at all), so their trunk base is guaranteed
     // to sit right on the ground line rather than merely tracking it loosely
-    for (let i=Math.floor(camX/240)-1; i<Math.floor((camX+W)/240)+1; i++){
+    for (let i=Math.floor(camX/280)-1; i<Math.floor((camX+W)/280)+1; i++){
       if (hash(i*2.9) > 0.55) continue; // sparse - not every slot gets one
-      const wx = i*240 + hash(i*4.4)*90;
+      const wx = i*280 + hash(i*4.4)*100;
       const sx = wx - camX;
-      if (sx<-40||sx>W+40) continue;
+      if (sx<-60||sx>W+60) continue;
       const gy = groundY() - heightAt(wx);
-      const scale = 1.5 + hash(i*6.6)*1.1;
-      drawTree(sx, gy, scale, pal.treeNear, 0.96, hash(i*8.8)>0.85, i);
+      const scale = 2.1 + hash(i*6.6)*1.7;
+      drawTree(sx, gy, scale, pal.treeNear, 0.97, hash(i*8.8)>0.85, i);
     }
   }
 
