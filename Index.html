@@ -144,6 +144,7 @@
   <div class="hud">
     <div class="hud-left">
       <div class="icon-btn" id="muteBtn" title="Mute music">♪</div>
+      <div class="icon-btn" id="nextTrackBtn" title="Next song">⏭</div>
       <div class="icon-btn" id="pauseBtn">❚❚</div>
     </div>
     <div class="hud-center" id="titleWatermark">MYTH&nbsp;OF&nbsp;SISYPHUS</div>
@@ -355,6 +356,34 @@
   let musicMuted = false;
   const muteBtn = document.getElementById('muteBtn');
 
+  // THE ACTUAL BUG: only playerA was ever play()'d from a real tap (inside
+  // startGame()). playerB's very first .play() call happened later, from
+  // inside the timeupdate/crossfade code - which is NOT a user gesture.
+  // Mobile Safari (and some Chrome/Android configs) require EVERY <audio>
+  // element to individually receive a play() call during an actual user
+  // gesture at least once - unlike desktop Chrome, unlocking one element
+  // does not unlock the other. So playerB's play() during the crossfade was
+  // silently rejected (the .catch(()=>{}) swallowed it), the fade-out timer
+  // still ran to completion on schedule, and the code then paused playerA
+  // anyway, believing the handoff had succeeded. Net effect: track 1 plays,
+  // then everything just goes silent - exactly what was reported. Fix: play()
+  // + immediately pause() BOTH players, synchronously inside the very first
+  // real tap, before anything else happens.
+  let audioUnlocked = false;
+  function unlockAudioPlayers(){
+    if (audioUnlocked) return;
+    audioUnlocked = true;
+    loadTrack(playerA, 0);
+    loadTrack(playerB, MUSIC_TRACKS.length>1 ? 1 : 0);
+    [playerA, playerB].forEach(p=>{
+      p.muted = true;
+      let pr;
+      try { pr = p.play(); } catch(e){ p.muted = false; return; }
+      const finish = ()=>{ p.pause(); p.currentTime = 0; p.muted = false; };
+      if (pr && pr.then) pr.then(finish).catch(finish); else finish();
+    });
+  }
+
   function loadTrack(player, index){
     player.src = MUSIC_TRACKS[index];
     player.load();
@@ -430,9 +459,46 @@
     activePlayer.play().catch(()=>{});
     currentTrackIndex = nextIndex;
   }
+  // If a track's file 404s or otherwise fails to decode, don't just go silent
+  // for the rest of the run - move on to the next track. skipAttempts caps
+  // how many times this can chain in a row, in case every path is broken.
+  let skipAttempts = 0;
+  function handleError(e){
+    const p = e.target;
+    if (p !== activePlayer) return;
+    if (skipAttempts >= MUSIC_TRACKS.length) return; // every track failed - stop trying
+    skipAttempts++;
+    const nextIndex = (currentTrackIndex + 1) % MUSIC_TRACKS.length;
+    loadTrack(activePlayer, nextIndex);
+    activePlayer.volume = BG_MUSIC_VOLUME;
+    activePlayer.play().catch(()=>{});
+    currentTrackIndex = nextIndex;
+  }
   [playerA, playerB].forEach(p=>{
     p.addEventListener('timeupdate', handleTimeUpdate);
     p.addEventListener('ended', handleEnded);
+    p.addEventListener('error', handleError);
+    p.addEventListener('playing', ()=>{ skipAttempts = 0; });
+  });
+
+  // manual "skip to next song" - used by the new next-track button. Reuses
+  // the same crossfade path as the automatic end-of-song handoff so it fades
+  // rather than hard-cutting, but falls back to a hard swap if a crossfade
+  // is already mid-flight or music hasn't started yet.
+  function skipToNext(){
+    unlockAudioPlayers();
+    if (currentTrackIndex === -1){ startPlaylist(); return; }
+    if (crossfading){
+      cancelAnimationFrame(fadeRAF);
+      idlePlayer.pause(); idlePlayer.volume = 0;
+      crossfading = false;
+    }
+    beginCrossfade();
+  }
+
+  document.getElementById('nextTrackBtn').addEventListener('pointerdown', e=>{
+    e.preventDefault(); e.stopPropagation();
+    skipToNext();
   });
 
   muteBtn.addEventListener('pointerdown', e=>{
@@ -500,6 +566,7 @@
   const TAP_IMPULSE_BASE = 158;
   const REF_INTERVAL = 232; // ms - taps faster than this get a bonus, slower get a penalty
   function doTap(){
+    unlockAudioPlayers();
     if (state==='start' || state==='over'){ startGame(); return; }
     if (state==='paused'){ resumeGame(); return; }
     if (state!=='playing') return;
@@ -1006,16 +1073,46 @@
     }
     ctx.strokeStyle = 'rgba(190,230,140,0.35)'; ctx.lineWidth=3; ctx.stroke();
 
-    // flowers scattered on grass edge
+    // grass tufts along the hillside - short blades in two green tones so the
+    // slope itself reads as textured grass, not a flat fill with things
+    // scattered on top of bare ground
+    for (let sx=-10; sx<=W+10; sx+=5){
+      const wx=camX+sx;
+      const tIdx = Math.floor(wx/6);
+      const tv = hash(tIdx*7.7);
+      if (tv>0.34){
+        const y=gY-heightAt(wx);
+        const bh = 3+tv*6;
+        const lean = (hash(tIdx*4.4)-0.5)*3;
+        const dark = hash(tIdx*2.1)>0.5;
+        ctx.strokeStyle = dark ? 'rgba(70,120,55,0.7)' : 'rgba(150,205,110,0.6)';
+        ctx.lineWidth=1.4;
+        ctx.beginPath();
+        ctx.moveTo(sx,y+1);
+        ctx.lineTo(sx+lean, y-bh);
+        ctx.stroke();
+      }
+    }
+
+    // small flowers scattered on the grass - a cluster of petals around a
+    // bright center, instead of a single flat pixel
     for (let sx=-10; sx<=W+10; sx+=step){
       const wx=camX+sx;
       const hIdx = Math.floor(wx/18);
       const hv = hash(hIdx*3.3);
       if (hv>0.90){
-        const y=gY-heightAt(wx)-4;
-        const colors=['#e78ba3','#f2ede0','#c98adf'];
-        ctx.fillStyle = colors[Math.floor(hv*30)%colors.length];
-        ctx.fillRect(sx, y-3, 3,3);
+        const y=gY-heightAt(wx)-3;
+        const colors=['#e78ba3','#f2ede0','#c98adf','#f0c05a'];
+        const col = colors[Math.floor(hv*40)%colors.length];
+        ctx.fillStyle='rgba(60,110,50,0.8)';
+        ctx.fillRect(sx-0.5,y,1,4); // tiny stem
+        ctx.fillStyle=col;
+        // four petals around a center, in a plus arrangement
+        ctx.fillRect(sx-2,y-3,2,2); ctx.fillRect(sx+1,y-3,2,2);
+        ctx.fillRect(sx-2,y-6,2,2); ctx.fillRect(sx+1,y-6,2,2);
+        ctx.fillRect(sx-1,y-5,3,3);
+        ctx.fillStyle='#f7d94a';
+        ctx.fillRect(sx-0.5,y-4.5,2,2);
       }
     }
 
@@ -1035,9 +1132,15 @@
   // That's what makes it read as one continuous sculpted body instead of a
   // pile of disconnected parts: there's no seam where two separately-filled
   // shapes with slightly different edges meet.
+  // Sizing is now driven by R (the rock's own radius) rather than PX. PX scales
+  // with screen WIDTH while R scales with screen HEIGHT - on a wide/landscape
+  // viewport those two drift apart, and the old "min(PX*1.15, R*0.155)" let PX
+  // become the dominant term, which could make Sisyphus render TALLER than the
+  // boulder's full diameter. Tying him to R alone keeps him consistently
+  // smaller than the rock he's pushing, on every screen shape.
   function drawFigure(gx,gy,theta,pose,speed){
     const R = ROCKR();
-    const s = Math.max(2, Math.min(PX*1.15, R*0.155));
+    const s = Math.max(PX*0.45, R*0.066);
     ctx.save();
     ctx.translate(gx,gy);
     ctx.rotate(theta);
@@ -1092,6 +1195,16 @@
       rectPath(-6.8, -8.7-bob, 5.0, 3.6);   // hips / lower back
       rectPath(-7.0, -11.6-bob, 5.6, 3.2);  // ribcage
       rectPath(-6.4, -13.6-bob, 4.4, 2.6);  // shoulders
+
+      // draped loincloth at the waist, hanging past the hip line - the one
+      // classical-statuary detail that reads as "Sisyphus" rather than just
+      // any figure pushing a rock
+      rectPath(-7.4, -5.8-bob, 3.2, 5.4);
+      ctx.moveTo((-7.4)*s, (-1.0-bob)*s);
+      ctx.lineTo((-4.6)*s, (-1.4-bob)*s);
+      ctx.lineTo((-5.2)*s, (0.6-bob)*s);
+      ctx.lineTo((-7.8)*s, (0.2-bob)*s);
+      ctx.closePath();
 
       // head - round, tucked down into the effort
       circPath(-7.3, -14.9-bob, 2.1);
